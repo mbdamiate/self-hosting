@@ -164,7 +164,8 @@ sudo apt install -y \
     cloud-image-utils \
     genisoimage \
     wget \
-    openssh-client
+    openssh-client \
+    acl
 
 echo "==> Adding your user to the libvirt and kvm groups..."
 sudo usermod -aG libvirt "$(whoami)"
@@ -193,7 +194,56 @@ if [ "${#MISSING_GROUPS[@]}" -gt 0 ]; then
 fi
 
 # ============================================================
-# 3. SSH key check
+# 3. NAT network readiness (default libvirt network)
+# ============================================================
+if [ -z "$BRIDGE_IFACE" ]; then
+    echo "==> Checking the libvirt 'default' network (required for NAT networking)..."
+    if ! virsh net-info default >/dev/null 2>&1; then
+        echo "ERROR: the libvirt network 'default' is not defined."
+        echo "       Inspect available networks with: virsh net-list --all"
+        echo "       Define/restore it, e.g.: virsh net-define /usr/share/libvirt/networks/default.xml"
+        exit 1
+    fi
+
+    if [ "$(virsh net-info default | awk '/^Active:/ {print $2}')" = "yes" ]; then
+        echo "    OK: 'default' network is already active."
+    else
+        echo "==> Starting the inactive 'default' network..."
+        if ! virsh net-start default; then
+            echo "ERROR: failed to start the libvirt 'default' network. Inspect with: virsh net-info default"
+            exit 1
+        fi
+    fi
+
+    echo "==> Enabling autostart for the 'default' network..."
+    if ! virsh net-autostart default; then
+        echo "ERROR: failed to enable autostart for the libvirt 'default' network."
+        exit 1
+    fi
+else
+    echo "==> Bridged mode selected: leaving the 'default' network untouched."
+fi
+
+# ============================================================
+# 4. QEMU storage access (ACL on $HOME)
+# ============================================================
+echo "==> Granting the 'libvirt-qemu' service account traversal access to \$HOME..."
+if ! id -u libvirt-qemu >/dev/null 2>&1; then
+    echo "ERROR: the 'libvirt-qemu' service account was not found."
+    echo "       This script targets Debian/Ubuntu libvirt packages, which create this"
+    echo "       account when libvirt-daemon-system is installed. Verify with: id libvirt-qemu"
+    exit 1
+fi
+
+if ! sudo setfacl -m u:libvirt-qemu:--x "$HOME"; then
+    echo "ERROR: failed to grant 'libvirt-qemu' execute-only access to \$HOME via setfacl."
+    echo "       Ensure the filesystem hosting \$HOME supports POSIX ACLs."
+    exit 1
+fi
+echo "    OK: 'libvirt-qemu' can now traverse \$HOME (execute-only, no read/listing)."
+
+# ============================================================
+# 5. SSH key check
 # ============================================================
 if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
     echo "==> No SSH key found at ${SSH_KEY_PATH}.pub"
@@ -203,7 +253,7 @@ fi
 SSH_PUB_KEY=$(cat "${SSH_KEY_PATH}.pub")
 
 # ============================================================
-# 4. Downloading the Debian 12 cloud image
+# 6. Downloading the Debian 12 cloud image
 # ============================================================
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
@@ -223,7 +273,7 @@ cp "$IMG_FILE" "$VM_DISK"
 qemu-img resize "$VM_DISK" "${VM_DISK_GB}G"
 
 # ============================================================
-# 5. Creating the cloud-init configuration (user-data / meta-data)
+# 7. Creating the cloud-init configuration (user-data / meta-data)
 # ============================================================
 echo "==> Generating cloud-init configuration..."
 
@@ -256,7 +306,7 @@ echo "==> Generating the cloud-init seed ISO..."
 cloud-localds seed.iso user-data meta-data
 
 # ============================================================
-# 6. Creating the VM via virt-install
+# 8. Creating the VM via virt-install
 # ============================================================
 echo "==> Checking if a VM with this name already exists..."
 if virsh dominfo "$VM_NAME" >/dev/null 2>&1; then
@@ -306,7 +356,7 @@ if [ -z "$VM_IP" ] && [ -z "$BRIDGE_IFACE" ]; then
 fi
 
 # ============================================================
-# 7. Port forwarding (--forward mode only)
+# 9. Port forwarding (--forward mode only)
 # ============================================================
 if [ -n "$FORWARD_RULES" ]; then
     if [ -z "$VM_IP" ]; then
