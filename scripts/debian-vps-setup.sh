@@ -10,7 +10,21 @@
 #   ./debian-vps-setup.sh                              # NAT networking (default, simplest)
 #   ./debian-vps-setup.sh --bridge=eth0                # bridged networking (macvtap) over interface eth0
 #   ./debian-vps-setup.sh --forward=2222:22,8080:80    # NAT + port forwarding from the host
+#   ./debian-vps-setup.sh --name=app-01 --ip=192.168.122.50   # fleet VM with a stable name/IP
+#   ./debian-vps-setup.sh --ram=4096 --vcpus=4 --disk=40      # custom sizing
 #   ./debian-vps-setup.sh --help
+#
+# Fleet flags (for creating multiple independently-addressable VMs):
+#   --name=NAME   Name/hostname for this VM (default: debian-vps). Each fleet
+#                 VM needs its own --name.
+#   --ram=MB      RAM in MB (default: 2048).
+#   --vcpus=N     vCPU count (default: 2).
+#   --disk=GB     Disk size in GB (default: 20).
+#   --ip=ADDRESS  Reserve a stable IP + resolvable hostname on the 'default'
+#                 NAT network (plain NAT or --forward only; usage error with
+#                 --bridge). Rejected if already reserved/leased. Omit to
+#                 auto-pick the first free address in the network's DHCP
+#                 range. Other fleet VMs can then reach this one by hostname.
 #
 # --bridge mode (requires a WIRED interface):
 #   Uses macvtap in bridge mode over the given physical interface (e.g. eth0, enp3s0).
@@ -48,7 +62,6 @@ VM_DISK_GB=20           # Disk size in GB
 VM_USER="admin"         # User created inside the VM
 VM_HOSTNAME="debian-vps"
 SSH_KEY_PATH="$HOME/.ssh/id_ed25519"   # Public key used for SSH access
-WORK_DIR="$HOME/vms/${VM_NAME}"
 CLOUD_IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
 
 # ============================================================
@@ -56,12 +69,27 @@ CLOUD_IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-g
 # ============================================================
 BRIDGE_IFACE=""
 FORWARD_RULES=""
+STATIC_IP=""
 
 print_help() {
     cat <<HELP
 Usage: $0 [options]
 
 Options:
+  --name=NAME         Name/hostname for the VM (default: debian-vps). Use a
+                      distinct --name per VM to run a fleet of VMs at once.
+  --ram=MB            RAM in MB (default: 2048).
+  --vcpus=N           vCPU count (default: 2).
+  --disk=GB           Disk size in GB (default: 20).
+  --ip=ADDRESS        Reserve a stable IP and resolvable hostname for this VM
+                      on the 'default' NAT network (plain NAT or --forward
+                      only — usage error when combined with --bridge, since
+                      bridged VMs get their address from your router, not
+                      libvirt's DHCP). Rejected if already reserved for
+                      another VM or under an active lease. Omit to
+                      auto-pick the first free address in the network's
+                      configured DHCP range. Once reserved, other fleet VMs
+                      can resolve this VM by its --name/hostname.
   --bridge=IFACE     Use bridged networking (macvtap) over the physical
                       interface IFACE (e.g. --bridge=eth0). The VM gets an IP
                       from your router via DHCP. Requires a WIRED interface —
@@ -80,6 +108,22 @@ HELP
 
 for arg in "$@"; do
     case "$arg" in
+        --name=*)
+            VM_NAME="${arg#*=}"
+            VM_HOSTNAME="${arg#*=}"
+            ;;
+        --ram=*)
+            VM_RAM_MB="${arg#*=}"
+            ;;
+        --vcpus=*)
+            VM_VCPUS="${arg#*=}"
+            ;;
+        --disk=*)
+            VM_DISK_GB="${arg#*=}"
+            ;;
+        --ip=*)
+            STATIC_IP="${arg#*=}"
+            ;;
         --bridge=*)
             BRIDGE_IFACE="${arg#*=}"
             ;;
@@ -98,8 +142,16 @@ for arg in "$@"; do
     esac
 done
 
+WORK_DIR="$HOME/vms/${VM_NAME}"
+
 if [ -n "$BRIDGE_IFACE" ] && [ -n "$FORWARD_RULES" ]; then
     echo "ERROR: --bridge and --forward are mutually exclusive (forwarding only makes sense on NAT)."
+    exit 1
+fi
+
+if [ -n "$BRIDGE_IFACE" ] && [ -n "$STATIC_IP" ]; then
+    echo "ERROR: --ip and --bridge are mutually exclusive (bridged VMs get their address from"
+    echo "       your router's DHCP, not libvirt's 'default' network, so there is nothing to reserve)."
     exit 1
 fi
 
@@ -125,6 +177,65 @@ elif [ -n "$FORWARD_RULES" ]; then
 else
     echo "==> No --bridge or --forward given, using plain NAT (virbr0)."
 fi
+
+# ============================================================
+# 0.1 Static IP/hostname reservation helpers (NAT-family only)
+# ============================================================
+ip_to_int() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    echo "$(( (a << 24) + (b << 16) + (c << 8) + d ))"
+}
+
+int_to_ip() {
+    local ip_int="$1"
+    echo "$(( (ip_int >> 24) & 255 )).$(( (ip_int >> 16) & 255 )).$(( (ip_int >> 8) & 255 )).$(( ip_int & 255 ))"
+}
+
+# Prints the VM name a given IP is already statically reserved for on the
+# 'default' network, or nothing if it has no reservation.
+#
+# Uses process substitution (not a pipe into the while loop) and explicit
+# `return 0`s throughout: with `set -eo pipefail`, a pipe ending in a `while
+# read` that never matches anything (e.g. no reservations exist yet) exits
+# non-zero, which would otherwise silently kill the whole script when this
+# function is called via command substitution (`VAR=$(find_ip_reservation_owner ...)`).
+find_ip_reservation_owner() {
+    local host_line host_ip host_name
+    while IFS= read -r host_line; do
+        host_ip=$(echo "$host_line" | grep -oP "ip='\K[^']+" || true)
+        host_name=$(echo "$host_line" | grep -oP "name='\K[^']+" || true)
+        if [ "$host_ip" = "$1" ]; then
+            echo "$host_name"
+            return 0
+        fi
+    done < <(virsh net-dumpxml default 2>/dev/null | grep -oP "<host [^>]*/>" || true)
+    return 0
+}
+
+is_ip_leased() {
+    virsh net-dhcp-leases default 2>/dev/null \
+        | grep -oP '\d{1,3}(\.\d{1,3}){3}(?=/)' \
+        | grep -qx "$1"
+}
+
+is_ip_free() {
+    [ -z "$(find_ip_reservation_owner "$1")" ] && ! is_ip_leased "$1"
+}
+
+# Generates a MAC address in the same 52:54:00 (QEMU/KVM) range libvirt uses
+# for auto-assigned NICs, retrying until it doesn't collide with an existing
+# reservation on the 'default' network.
+generate_mac() {
+    local mac
+    while true; do
+        mac=$(printf '52:54:00:%02x:%02x:%02x' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)))
+        if ! virsh net-dumpxml default 2>/dev/null | grep -qi "mac='${mac}'"; then
+            echo "$mac"
+            return
+        fi
+    done
+}
 
 # ============================================================
 # 1. Prerequisite checks
@@ -255,6 +366,78 @@ if [ "$VM_EXISTS" -eq 0 ]; then
     echo "    OK: no existing VM named '${VM_NAME}', proceeding with setup."
 
     # ============================================================
+    # 5.1 Static IP/hostname reservation (NAT-family only)
+    # ============================================================
+    RESERVED_MAC=""
+    if [ -z "$BRIDGE_IFACE" ]; then
+        echo "==> Resolving a static IP/hostname reservation on the 'default' network..."
+
+        # A reservation can only exist for '${VM_HOSTNAME}' here if an earlier run
+        # registered it and then failed before actually creating the VM (we're in
+        # the VM_EXISTS=0 branch, so no VM currently owns it). libvirt/dnsmasq
+        # rejects a second host entry with the same name even at a different IP,
+        # so clear the orphan first rather than erroring out on every retry.
+        STALE_RESERVATION=$(virsh net-dumpxml default 2>/dev/null | grep -oP "<host [^>]*/>" | grep -F "name='${VM_HOSTNAME}'" || true)
+        if [ -n "$STALE_RESERVATION" ]; then
+            echo "    Found an orphaned reservation from an earlier incomplete run, replacing it:"
+            echo "      ${STALE_RESERVATION}"
+            virsh net-update default delete ip-dhcp-host "$STALE_RESERVATION" --live --config >/dev/null 2>&1 || true
+        fi
+
+        if [ -n "$STATIC_IP" ]; then
+            RESERVATION_OWNER=$(find_ip_reservation_owner "$STATIC_IP")
+            if [ -n "$RESERVATION_OWNER" ]; then
+                echo "ERROR: address ${STATIC_IP} is already reserved for VM '${RESERVATION_OWNER}'."
+                echo "       Pick a different --ip, or remove that VM's reservation first."
+                exit 1
+            fi
+            if is_ip_leased "$STATIC_IP"; then
+                echo "ERROR: address ${STATIC_IP} has no static reservation but currently has an"
+                echo "       active DHCP lease. Pick a different --ip, or wait for the lease to clear."
+                exit 1
+            fi
+            RESOLVED_IP="$STATIC_IP"
+            echo "    OK: ${RESOLVED_IP} is free."
+        else
+            RANGE_LINE=$(virsh net-dumpxml default 2>/dev/null | grep -oP '<range[^/]*/>' | head -n1)
+            RANGE_START=$(echo "$RANGE_LINE" | grep -oP "start='\K[^']+" || true)
+            RANGE_END=$(echo "$RANGE_LINE" | grep -oP "end='\K[^']+" || true)
+            if [ -z "$RANGE_START" ] || [ -z "$RANGE_END" ]; then
+                echo "ERROR: could not determine the 'default' network's DHCP range."
+                echo "       Inspect with: virsh net-dumpxml default"
+                exit 1
+            fi
+
+            RESOLVED_IP=""
+            START_INT=$(ip_to_int "$RANGE_START")
+            END_INT=$(ip_to_int "$RANGE_END")
+            for (( ip_int = START_INT; ip_int <= END_INT; ip_int++ )); do
+                CANDIDATE_IP=$(int_to_ip "$ip_int")
+                if is_ip_free "$CANDIDATE_IP"; then
+                    RESOLVED_IP="$CANDIDATE_IP"
+                    break
+                fi
+            done
+
+            if [ -z "$RESOLVED_IP" ]; then
+                echo "ERROR: no free address found in the 'default' network's DHCP range (${RANGE_START} - ${RANGE_END})."
+                exit 1
+            fi
+            echo "    Auto-picked free address: ${RESOLVED_IP}"
+        fi
+
+        RESERVED_MAC=$(generate_mac)
+        echo "==> Reserving ${RESOLVED_IP} for '${VM_HOSTNAME}' (mac ${RESERVED_MAC}) on the 'default' network..."
+        if ! virsh net-update default add ip-dhcp-host \
+            "<host mac='${RESERVED_MAC}' name='${VM_HOSTNAME}' ip='${RESOLVED_IP}'/>" \
+            --live --config >/dev/null; then
+            echo "ERROR: failed to register the DHCP host reservation on the 'default' network."
+            exit 1
+        fi
+        echo "    OK: reservation registered."
+    fi
+
+    # ============================================================
     # 6. SSH key check
     # ============================================================
     if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
@@ -273,7 +456,7 @@ if [ "$VM_EXISTS" -eq 0 ]; then
     IMG_FILE="debian-12-generic-amd64.qcow2"
     VM_DISK="${VM_NAME}.qcow2"
 
-    if [ ! -f "$IMG_FILE" ]; then
+    if [ ! -s "$IMG_FILE" ]; then
         echo "==> Downloading the official Debian 12 cloud image..."
         wget -O "$IMG_FILE" "$CLOUD_IMG_URL"
     else
@@ -324,7 +507,7 @@ EOF
         NETWORK_ARG="type=direct,source=${BRIDGE_IFACE},source_mode=bridge,model=virtio"
         echo "==> Creating the VM (bridged networking via macvtap over ${BRIDGE_IFACE})..."
     else
-        NETWORK_ARG="network=default,model=virtio"
+        NETWORK_ARG="network=default,model=virtio,mac=${RESERVED_MAC}"
         echo "==> Creating the VM (NAT networking via virbr0)..."
     fi
 
