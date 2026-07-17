@@ -243,41 +243,53 @@ fi
 echo "    OK: 'libvirt-qemu' can now traverse \$HOME (execute-only, no read/listing)."
 
 # ============================================================
-# 5. SSH key check
+# 5. VM existence check
 # ============================================================
-if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
-    echo "==> No SSH key found at ${SSH_KEY_PATH}.pub"
-    echo "==> Generating a new key pair..."
-    ssh-keygen -t ed25519 -f "${SSH_KEY_PATH}" -N "" -C "${VM_USER}@${VM_HOSTNAME}"
-fi
-SSH_PUB_KEY=$(cat "${SSH_KEY_PATH}.pub")
-
-# ============================================================
-# 6. Downloading the Debian 12 cloud image
-# ============================================================
-mkdir -p "$WORK_DIR"
-cd "$WORK_DIR"
-
-IMG_FILE="debian-12-generic-amd64.qcow2"
-VM_DISK="${VM_NAME}.qcow2"
-
-if [ ! -f "$IMG_FILE" ]; then
-    echo "==> Downloading the official Debian 12 cloud image..."
-    wget -O "$IMG_FILE" "$CLOUD_IMG_URL"
-else
-    echo "==> Cloud image already downloaded, skipping."
+echo "==> Checking if a VM with this name already exists..."
+VM_EXISTS=0
+if virsh dominfo "$VM_NAME" >/dev/null 2>&1; then
+    VM_EXISTS=1
 fi
 
-echo "==> Creating the VM disk (copy from the base image) and resizing to ${VM_DISK_GB}G..."
-cp "$IMG_FILE" "$VM_DISK"
-qemu-img resize "$VM_DISK" "${VM_DISK_GB}G"
+if [ "$VM_EXISTS" -eq 0 ]; then
+    echo "    OK: no existing VM named '${VM_NAME}', proceeding with setup."
 
-# ============================================================
-# 7. Creating the cloud-init configuration (user-data / meta-data)
-# ============================================================
-echo "==> Generating cloud-init configuration..."
+    # ============================================================
+    # 6. SSH key check
+    # ============================================================
+    if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
+        echo "==> No SSH key found at ${SSH_KEY_PATH}.pub"
+        echo "==> Generating a new key pair..."
+        ssh-keygen -t ed25519 -f "${SSH_KEY_PATH}" -N "" -C "${VM_USER}@${VM_HOSTNAME}"
+    fi
+    SSH_PUB_KEY=$(cat "${SSH_KEY_PATH}.pub")
 
-cat > user-data <<EOF
+    # ============================================================
+    # 7. Downloading the Debian 12 cloud image
+    # ============================================================
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR"
+
+    IMG_FILE="debian-12-generic-amd64.qcow2"
+    VM_DISK="${VM_NAME}.qcow2"
+
+    if [ ! -f "$IMG_FILE" ]; then
+        echo "==> Downloading the official Debian 12 cloud image..."
+        wget -O "$IMG_FILE" "$CLOUD_IMG_URL"
+    else
+        echo "==> Cloud image already downloaded, skipping."
+    fi
+
+    echo "==> Creating the VM disk (copy from the base image) and resizing to ${VM_DISK_GB}G..."
+    cp "$IMG_FILE" "$VM_DISK"
+    qemu-img resize "$VM_DISK" "${VM_DISK_GB}G"
+
+    # ============================================================
+    # 8. Creating the cloud-init configuration (user-data / meta-data)
+    # ============================================================
+    echo "==> Generating cloud-init configuration..."
+
+    cat > user-data <<EOF
 #cloud-config
 hostname: ${VM_HOSTNAME}
 manage_etc_hosts: true
@@ -297,49 +309,115 @@ runcmd:
   - systemctl enable --now qemu-guest-agent
 EOF
 
-cat > meta-data <<EOF
+    cat > meta-data <<EOF
 instance-id: ${VM_NAME}-$(date +%s)
 local-hostname: ${VM_HOSTNAME}
 EOF
 
-echo "==> Generating the cloud-init seed ISO..."
-cloud-localds seed.iso user-data meta-data
+    echo "==> Generating the cloud-init seed ISO..."
+    cloud-localds seed.iso user-data meta-data
+
+    # ============================================================
+    # 9. Creating the VM via virt-install
+    # ============================================================
+    if [ -n "$BRIDGE_IFACE" ]; then
+        NETWORK_ARG="type=direct,source=${BRIDGE_IFACE},source_mode=bridge,model=virtio"
+        echo "==> Creating the VM (bridged networking via macvtap over ${BRIDGE_IFACE})..."
+    else
+        NETWORK_ARG="network=default,model=virtio"
+        echo "==> Creating the VM (NAT networking via virbr0)..."
+    fi
+
+    virt-install \
+        --name "$VM_NAME" \
+        --memory "$VM_RAM_MB" \
+        --vcpus "$VM_VCPUS" \
+        --disk path="${WORK_DIR}/${VM_DISK}",format=qcow2 \
+        --disk path="${WORK_DIR}/seed.iso",device=cdrom \
+        --os-variant debian12 \
+        --network "$NETWORK_ARG" \
+        --graphics none \
+        --import \
+        --noautoconsole
+
+    echo ""
+    echo "=================================================="
+    echo " VM '${VM_NAME}' created successfully!"
+    echo "=================================================="
+else
+    echo ""
+    echo "=================================================="
+    echo " Reusing existing VM '${VM_NAME}'"
+    echo "=================================================="
+fi
 
 # ============================================================
-# 8. Creating the VM via virt-install
+# 10. Effective network mode introspection
 # ============================================================
-echo "==> Checking if a VM with this name already exists..."
-if virsh dominfo "$VM_NAME" >/dev/null 2>&1; then
-    echo "ERROR: a VM named '${VM_NAME}' already exists. Remove it first (virsh undefine ${VM_NAME} --remove-all-storage) or change VM_NAME in the script."
+IFACE_LINE=$(virsh domiflist "$VM_NAME" 2>/dev/null | awk '$2=="network" || $2=="direct" {print; exit}')
+if [ -z "$IFACE_LINE" ]; then
+    echo "ERROR: could not determine the network interface for VM '${VM_NAME}'."
+    echo "       Inspect manually with: virsh domiflist ${VM_NAME}"
     exit 1
 fi
+IFACE_TYPE=$(echo "$IFACE_LINE" | awk '{print $2}')
+IFACE_SOURCE=$(echo "$IFACE_LINE" | awk '{print $3}')
 
-if [ -n "$BRIDGE_IFACE" ]; then
-    NETWORK_ARG="type=direct,source=${BRIDGE_IFACE},source_mode=bridge,model=virtio"
-    echo "==> Creating the VM (bridged networking via macvtap over ${BRIDGE_IFACE})..."
+if [ "$IFACE_TYPE" = "direct" ]; then
+    EFFECTIVE_MODE="bridged"
+    EFFECTIVE_BRIDGE_IFACE="$IFACE_SOURCE"
 else
-    NETWORK_ARG="network=default,model=virtio"
-    echo "==> Creating the VM (NAT networking via virbr0)..."
+    EFFECTIVE_MODE="nat"
+    EFFECTIVE_BRIDGE_IFACE=""
 fi
 
-virt-install \
-    --name "$VM_NAME" \
-    --memory "$VM_RAM_MB" \
-    --vcpus "$VM_VCPUS" \
-    --disk path="${WORK_DIR}/${VM_DISK}",format=qcow2 \
-    --disk path="${WORK_DIR}/seed.iso",device=cdrom \
-    --os-variant debian12 \
-    --network "$NETWORK_ARG" \
-    --graphics none \
-    --import \
-    --noautoconsole
+# ============================================================
+# 11. Reusing an existing VM: mode-mismatch warning and auto-start
+# ============================================================
+if [ "$VM_EXISTS" -eq 1 ]; then
+    REQUESTED_BRIDGED=0
+    [ -n "$BRIDGE_IFACE" ] && REQUESTED_BRIDGED=1
+    EFFECTIVE_BRIDGED=0
+    [ "$EFFECTIVE_MODE" = "bridged" ] && EFFECTIVE_BRIDGED=1
+
+    if [ "$REQUESTED_BRIDGED" -ne "$EFFECTIVE_BRIDGED" ]; then
+        echo ""
+        if [ "$EFFECTIVE_MODE" = "bridged" ]; then
+            echo "WARNING: VM '${VM_NAME}' already exists using bridged networking (via '${EFFECTIVE_BRIDGE_IFACE}'),"
+            echo "         but this run did not request --bridge."
+        else
+            echo "WARNING: VM '${VM_NAME}' already exists using NAT networking (virbr0),"
+            echo "         but this run requested --bridge."
+        fi
+        echo "         Network mode is fixed when the VM is created and cannot be changed by rerunning"
+        echo "         this script. To use a different mode, remove the VM first and run again:"
+        echo "           virsh undefine ${VM_NAME} --remove-all-storage"
+        echo "         Continuing with the VM's actual (${EFFECTIVE_MODE}) networking."
+    fi
+
+    VM_STATE=$(virsh domstate "$VM_NAME" 2>/dev/null || echo "unknown")
+    if [ "$VM_STATE" != "running" ]; then
+        echo "==> VM '${VM_NAME}' is currently '${VM_STATE}', starting it..."
+        if ! virsh start "$VM_NAME"; then
+            echo "ERROR: failed to start VM '${VM_NAME}'. Inspect with: virsh domstate ${VM_NAME}"
+            exit 1
+        fi
+    else
+        echo "    OK: VM '${VM_NAME}' is already running."
+    fi
+fi
+
+# ============================================================
+# 12. VM autostart
+# ============================================================
+echo "==> Configuring '${VM_NAME}' to autostart on host boot..."
+if ! virsh autostart "$VM_NAME" >/dev/null 2>&1; then
+    echo "WARNING: failed to enable autostart for VM '${VM_NAME}'. Retry manually with:"
+    echo "         virsh autostart ${VM_NAME}"
+fi
 
 echo ""
-echo "=================================================="
-echo " VM '${VM_NAME}' created successfully!"
-echo "=================================================="
-echo ""
-echo "Waiting for cloud-init to finish and the VM to get a DHCP IP..."
+echo "Waiting for the VM to report a DHCP IP..."
 
 VM_IP=""
 for i in $(seq 1 30); do
@@ -350,16 +428,20 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-if [ -z "$VM_IP" ] && [ -z "$BRIDGE_IFACE" ]; then
+if [ -z "$VM_IP" ] && [ "$EFFECTIVE_MODE" = "nat" ]; then
     # Fallback for NAT: try the DHCP lease table directly.
     VM_IP=$(virsh net-dhcp-leases default 2>/dev/null | awk -v mac="" '/'"$VM_NAME"'/ {print $5}' | cut -d/ -f1 | head -n1)
 fi
 
 # ============================================================
-# 9. Port forwarding (--forward mode only)
+# 13. Port forwarding (--forward mode only)
 # ============================================================
 if [ -n "$FORWARD_RULES" ]; then
-    if [ -z "$VM_IP" ]; then
+    if [ "$EFFECTIVE_MODE" = "bridged" ]; then
+        echo ""
+        echo "WARNING: --forward was requested, but VM '${VM_NAME}' uses bridged networking."
+        echo "         Port forwarding only applies to the NAT network; skipping."
+    elif [ -z "$VM_IP" ]; then
         echo ""
         echo "WARNING: could not detect the VM's IP automatically, so port forwarding"
         echo "         rules were NOT applied. Once the VM is up, get its IP with:"
@@ -374,9 +456,16 @@ if [ -n "$FORWARD_RULES" ]; then
         for rule in "${RULES_ARR[@]}"; do
             HOST_PORT="${rule%%:*}"
             VM_PORT="${rule##*:}"
-            echo "    ${HOST_PORT} -> ${VM_IP}:${VM_PORT}"
-            sudo iptables -t nat -A PREROUTING -p tcp --dport "$HOST_PORT" -j DNAT --to-destination "${VM_IP}:${VM_PORT}"
-            sudo iptables -I FORWARD -p tcp -d "$VM_IP" --dport "$VM_PORT" -j ACCEPT
+            if sudo iptables -t nat -C PREROUTING -p tcp --dport "$HOST_PORT" -j DNAT --to-destination "${VM_IP}:${VM_PORT}" 2>/dev/null; then
+                echo "    ${HOST_PORT} -> ${VM_IP}:${VM_PORT} (DNAT rule already present, skipping)"
+            else
+                echo "    ${HOST_PORT} -> ${VM_IP}:${VM_PORT}"
+                sudo iptables -t nat -A PREROUTING -p tcp --dport "$HOST_PORT" -j DNAT --to-destination "${VM_IP}:${VM_PORT}"
+            fi
+
+            if ! sudo iptables -C FORWARD -p tcp -d "$VM_IP" --dport "$VM_PORT" -j ACCEPT 2>/dev/null; then
+                sudo iptables -I FORWARD -p tcp -d "$VM_IP" --dport "$VM_PORT" -j ACCEPT
+            fi
         done
         echo ""
         echo "NOTE: these iptables rules are NOT persistent across host reboots."
@@ -389,8 +478,8 @@ if [ -n "$FORWARD_RULES" ]; then
 fi
 
 echo ""
-if [ -n "$BRIDGE_IFACE" ]; then
-    echo "Bridged mode: to find the VM's IP (via qemu-guest-agent), run:"
+if [ "$EFFECTIVE_MODE" = "bridged" ]; then
+    echo "Bridged mode (via '${EFFECTIVE_BRIDGE_IFACE}'): to find the VM's IP (via qemu-guest-agent), run:"
     echo "  virsh domifaddr ${VM_NAME} --source agent"
     echo ""
     echo "Then connect via SSH:"
@@ -401,6 +490,9 @@ elif [ -n "$FORWARD_RULES" ]; then
     echo ""
     echo "From this host itself, you can still connect directly to the NAT IP:"
     echo "  ssh ${VM_USER}@${VM_IP:-<VM_IP>}"
+    echo ""
+    echo "To find (or re-check) the VM's IP, run:"
+    echo "  virsh domifaddr ${VM_NAME}"
 else
     echo "To find the VM's IP, run:"
     echo "  virsh domifaddr ${VM_NAME}"
