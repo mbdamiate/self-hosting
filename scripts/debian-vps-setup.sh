@@ -173,13 +173,23 @@ sudo usermod -aG kvm "$(whoami)"
 echo "==> Enabling and starting the libvirtd service..."
 sudo systemctl enable --now libvirtd
 
-# If the user was just added to the groups, that only takes effect in a
-# new session. We use sg to run the rest of the script with the groups
-# already applied, without needing a logout/login.
-if ! groups | grep -qw libvirt; then
-    echo "==> Groups not applied to this session yet. Re-running with sg..."
-    printf -v QUOTED_ARGS '%q ' "$0" "$@"
-    exec sg libvirt -c "sg kvm -c \"${QUOTED_ARGS}\""
+# Group membership changes take effect only in a new login session. Do not
+# re-run this script through sg: nested group-switching shells can leave the
+# group check false and restart the whole setup indefinitely.
+CURRENT_GROUPS="$(id -nG)"
+MISSING_GROUPS=()
+for required_group in libvirt kvm; do
+    if [[ " ${CURRENT_GROUPS} " != *" ${required_group} "* ]]; then
+        MISSING_GROUPS+=("${required_group}")
+    fi
+done
+
+if [ "${#MISSING_GROUPS[@]}" -gt 0 ]; then
+    echo "ERROR: the current session is missing required groups: ${MISSING_GROUPS[*]}"
+    echo "       Your user was added to these groups, but the change only takes effect"
+    echo "       after a new login session. Log out and back in, then run this script again."
+    echo "       Verify with: id -nG"
+    exit 1
 fi
 
 # ============================================================
