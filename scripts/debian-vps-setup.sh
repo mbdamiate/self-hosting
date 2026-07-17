@@ -156,6 +156,7 @@ echo "==> Installing KVM, QEMU, libvirt, and cloud-init tools..."
 sudo apt update
 sudo apt install -y \
     qemu-system-x86 \
+    qemu-utils \
     libvirt-daemon-system \
     libvirt-clients \
     bridge-utils \

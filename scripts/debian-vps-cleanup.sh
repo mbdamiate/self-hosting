@@ -101,7 +101,7 @@ echo ""
 # ============================================================
 # 3. Remove installed packages
 # ============================================================
-PACKAGES="qemu-system-x86 libvirt-daemon-system libvirt-clients bridge-utils virtinst cloud-image-utils genisoimage"
+PACKAGES="qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients bridge-utils virtinst cloud-image-utils genisoimage"
 
 echo "Packages that will be removed (purge):"
 echo "  ${PACKAGES}"
