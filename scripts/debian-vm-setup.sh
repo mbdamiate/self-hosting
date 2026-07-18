@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# debian-vps-setup.sh
+# debian-vm-setup.sh
 # Checks prerequisites, installs KVM/QEMU/libvirt, and creates a Debian 12 VM
 # using the official cloud image + cloud-init, simulating a real VPS
 # (the same technique used by providers like DigitalOcean/Linode).
 #
 # Usage:
-#   chmod +x debian-vps-setup.sh
-#   ./debian-vps-setup.sh                              # NAT networking (default, simplest)
-#   ./debian-vps-setup.sh --bridge=eth0                # bridged networking (macvtap) over interface eth0
-#   ./debian-vps-setup.sh --forward=2222:22,8080:80    # NAT + port forwarding from the host
-#   ./debian-vps-setup.sh --name=app-01 --ip=192.168.122.50   # fleet VM with a stable name/IP
-#   ./debian-vps-setup.sh --ram=4096 --vcpus=4 --disk=40      # custom sizing
-#   ./debian-vps-setup.sh --help
+#   chmod +x debian-vm-setup.sh
+#   ./debian-vm-setup.sh                              # NAT networking (default, simplest)
+#   ./debian-vm-setup.sh --bridge=eth0                # bridged networking (macvtap) over interface eth0
+#   ./debian-vm-setup.sh --forward=2222:22,8080:80    # NAT + port forwarding from the host
+#   ./debian-vm-setup.sh --name=app-01 --ip=192.168.122.50   # fleet VM with a stable name/IP
+#   ./debian-vm-setup.sh --ram=4096 --vcpus=4 --disk=40      # custom sizing
+#   ./debian-vm-setup.sh --help
 #
 # Fleet flags (for creating multiple independently-addressable VMs):
-#   --name=NAME   Name/hostname for this VM (default: debian-vps). Each fleet
+#   --name=NAME   Name/hostname for this VM (default: debian-vm). Each fleet
 #                 VM needs its own --name.
 #   --ram=MB      RAM in MB (default: 2048).
 #   --vcpus=N     vCPU count (default: 2).
@@ -55,12 +55,12 @@ set -euo pipefail
 # ============================================================
 # CONFIGURATION — adjust as needed
 # ============================================================
-VM_NAME="debian-vps"
+VM_NAME="debian-vm"
 VM_RAM_MB=2048          # RAM in MB (e.g. a basic VPS plan)
 VM_VCPUS=2              # vCPUs
 VM_DISK_GB=20           # Disk size in GB
 VM_USER="admin"         # User created inside the VM
-VM_HOSTNAME="debian-vps"
+VM_HOSTNAME="debian-vm"
 SSH_KEY_PATH="$HOME/.ssh/id_ed25519"   # Public key used for SSH access
 CLOUD_IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
 
@@ -76,7 +76,7 @@ print_help() {
 Usage: $0 [options]
 
 Options:
-  --name=NAME         Name/hostname for the VM (default: debian-vps). Use a
+  --name=NAME         Name/hostname for the VM (default: debian-vm). Use a
                       distinct --name per VM to run a fleet of VMs at once.
   --ram=MB            RAM in MB (default: 2048).
   --vcpus=N           vCPU count (default: 2).

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# debian-vps-cleanup.sh
-# Removes what debian-vps-setup.sh created or installed. Three modes:
+# debian-vm-cleanup.sh
+# Removes what debian-vm-setup.sh created or installed. Three modes:
 #   (no flags)    Interactive walkthrough, asking for confirmation before
 #                 each step below.
 #   --vm-only     Non-interactive. Removes only the VM, its attached storage
 #                 (disk + cloud-init seed ISO), and its network reservation
 #                 (if any). Preserves the downloaded base cloud image,
 #                 installed packages, group membership, the default network,
-#                 and the QEMU storage ACL — so a rerun of debian-vps-setup.sh
+#                 and the QEMU storage ACL — so a rerun of debian-vm-setup.sh
 #                 is fast (no re-download, no reinstall).
 #   --purge-all   Non-interactive. Removes everything: the VM, the full
 #                 working directory (including the base image), installed
@@ -18,15 +18,15 @@
 #                 purging shared packages/network/groups would break it.
 #
 # Usage:
-#   chmod +x debian-vps-cleanup.sh
-#   ./debian-vps-cleanup.sh
-#   ./debian-vps-cleanup.sh --vm-only
-#   ./debian-vps-cleanup.sh --purge-all
-#   ./debian-vps-cleanup.sh --name=app-01 --vm-only   # target one fleet VM
+#   chmod +x debian-vm-cleanup.sh
+#   ./debian-vm-cleanup.sh
+#   ./debian-vm-cleanup.sh --vm-only
+#   ./debian-vm-cleanup.sh --purge-all
+#   ./debian-vm-cleanup.sh --name=app-01 --vm-only   # target one fleet VM
 #
 set -euo pipefail
 
-VM_NAME="debian-vps"
+VM_NAME="debian-vm"
 VM_ONLY=0
 PURGE_ALL=0
 
@@ -35,14 +35,14 @@ print_help() {
 Usage: $0 [--name=NAME] [--vm-only|--purge-all]
 
 Options:
-  --name=NAME  VM to target (default: debian-vps). Use a distinct --name per
+  --name=NAME  VM to target (default: debian-vm). Use a distinct --name per
                VM when managing a fleet of VMs.
   --vm-only    Non-interactive. Removes only the named VM, its attached
                storage (disk + cloud-init seed ISO), and its network
                reservation (if any). Preserves the downloaded base cloud
                image, installed packages, group membership, the default
                network, and the QEMU storage ACL — so a rerun of
-               debian-vps-setup.sh is fast.
+               debian-vm-setup.sh is fast.
   --purge-all  Non-interactive. Removes everything: the VM, the full working
                directory (including the base image), installed packages,
                group membership, the default network, and the QEMU storage
@@ -147,7 +147,7 @@ fi
 
 # The reservation lives on the network, not on the VM instance, so it can be
 # released even when the VM itself was never found above (e.g. an earlier
-# debian-vps-setup.sh run registered the reservation and then failed before
+# debian-vm-setup.sh run registered the reservation and then failed before
 # actually creating the VM, leaving it orphaned).
 if [ "$VM_ONLY" -eq 1 ] && command -v virsh >/dev/null 2>&1 && virsh net-info default >/dev/null 2>&1; then
     echo "==> Releasing '${VM_NAME}'s network reservation (if any)..."
@@ -269,7 +269,7 @@ if [ "$VM_ONLY" -eq 1 ]; then
     echo "  - Only the VM and its attached storage were removed."
     echo "  - The downloaded base cloud image, installed packages, group membership,"
     echo "    the default network, and the QEMU storage ACL on \$HOME were left in place."
-    echo "  - Rerun debian-vps-setup.sh to recreate the VM without re-downloading or"
+    echo "  - Rerun debian-vm-setup.sh to recreate the VM without re-downloading or"
     echo "    reinstalling anything."
 else
     echo "Notes:"
