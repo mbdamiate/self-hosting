@@ -1,8 +1,4 @@
-## Purpose
-
-Define the removal scope of `debian-vps-cleanup.sh`: which invocation modes it supports, what each mode removes or preserves, and the guarantees that keep the interactive and non-interactive paths consistent with each other.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Scope flags are mutually exclusive
 The cleanup script SHALL reject an invocation that passes both `--vm-only` and `--purge-all`.
@@ -12,15 +8,15 @@ The cleanup script SHALL reject an invocation that passes both `--vm-only` and `
 - **THEN** it exits with a usage error before performing any removal
 
 ### Requirement: VM name is configurable
-The cleanup script SHALL accept a `--name=<name>` argument identifying which VM's instance to target for `--vm-only`, and which VM to remove as part of `--purge-all`, using `"debian-vps"` when the argument is omitted.
+The cleanup script SHALL accept a `--name=<name>` argument identifying which VM's instance to target for `--vm-only`, and which VM to remove as part of `--purge-all`, using `"debian-vm"` when the argument is omitted.
 
 #### Scenario: Name provided
 - **WHEN** the cleanup script is invoked with `--name=app-01`
-- **THEN** it targets the VM named `app-01` instead of the default `debian-vps`
+- **THEN** it targets the VM named `app-01` instead of the default `debian-vm`
 
 #### Scenario: Name omitted
 - **WHEN** the cleanup script is invoked without `--name`
-- **THEN** it targets the VM named `debian-vps`, matching today's behavior
+- **THEN** it targets the VM named `debian-vm`, matching today's behavior
 
 ### Requirement: `--vm-only` removes only the VM instance
 The cleanup script SHALL, when invoked with `--vm-only`, remove only the named VM's definition, its attached storage, and its network reservation, without prompting for confirmation, and SHALL NOT remove the working directory as a whole, installed packages, group membership, the default libvirt network, or the QEMU storage ACL.

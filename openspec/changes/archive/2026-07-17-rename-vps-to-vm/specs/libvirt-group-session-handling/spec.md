@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-Define how the local VM setup handles libvirt and KVM group memberships without restarting itself or creating resources from an unprepared session.
-## Requirements
 ### Requirement: Prevent setup self-reexecution for group activation
 The local VM setup script SHALL NOT reexecute itself through `sg` or another shell-based group-switching mechanism after adding the caller to host groups.
 
@@ -19,4 +17,3 @@ The local VM setup script SHALL verify that both `libvirt` and `kvm` are active 
 #### Scenario: Login session has both required groups
 - **WHEN** both `libvirt` and `kvm` are active in the current process group list
 - **THEN** setup SHALL continue to the SSH key, cloud image, and VM-creation steps without self-reexecution
-

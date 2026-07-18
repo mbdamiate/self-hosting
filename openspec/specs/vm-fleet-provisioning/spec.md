@@ -1,19 +1,20 @@
+# vm-fleet-provisioning Specification
+
 ## Purpose
 
 Define how the setup script provisions VMs as part of a fleet: configurable naming and sizing, and static IP/hostname reservation on the `default` libvirt network so multiple VMs can coexist and reach each other by name.
 
 ## Requirements
-
 ### Requirement: VM name is configurable
-The setup script SHALL accept a `--name=<name>` argument that overrides the default VM name/hostname used to create and manage the VM, and SHALL use `"debian-vps"` when the argument is omitted.
+The setup script SHALL accept a `--name=<name>` argument that overrides the default VM name/hostname used to create and manage the VM, and SHALL use `"debian-vm"` when the argument is omitted.
 
 #### Scenario: Name provided
 - **WHEN** the setup script is invoked with `--name=app-01`
-- **THEN** it creates and manages a VM named and hosted as `app-01` instead of the default `debian-vps`
+- **THEN** it creates and manages a VM named and hosted as `app-01` instead of the default `debian-vm`
 
 #### Scenario: Name omitted
 - **WHEN** the setup script is invoked without `--name`
-- **THEN** it creates and manages a VM named `debian-vps`, matching today's behavior
+- **THEN** it creates and manages a VM named `debian-vm`, matching today's behavior
 
 ### Requirement: VM sizing is configurable
 The setup script SHALL accept `--ram=<megabytes>`, `--vcpus=<count>`, and `--disk=<gigabytes>` arguments overriding the VM's memory, vCPU count, and disk size, and SHALL use today's defaults (2048 MB, 2 vCPUs, 20 GB) for any of the three left unset, without prompting for the missing values.
@@ -66,3 +67,4 @@ When `--ip` is omitted for a NAT-family invocation, the setup script SHALL selec
 #### Scenario: Range introspected, not hardcoded
 - **WHEN** the setup script auto-picks an address
 - **THEN** it determines the address range to scan by reading the `default` network's own configuration rather than assuming a fixed subnet
+

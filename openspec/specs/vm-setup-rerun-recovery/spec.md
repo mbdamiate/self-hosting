@@ -1,9 +1,10 @@
+# vm-setup-rerun-recovery Specification
+
 ## Purpose
 
-Allow the VPS setup script to be re-run safely against an already-existing VM: detect the existing VM instead of failing, determine its effective network mode from libvirt rather than trusting the current invocation's flags, and reach a working connection-info summary regardless of whether the VM was freshly created or reused.
+Allow the VM setup script to be re-run safely against an already-existing VM: detect the existing VM instead of failing, determine its effective network mode from libvirt rather than trusting the current invocation's flags, and reach a working connection-info summary regardless of whether the VM was freshly created or reused.
 
 ## Requirements
-
 ### Requirement: Detect an existing VM before disk and cloud-init work
 Before performing SSH key handling, disk image download/copy/resize, or cloud-init generation, setup SHALL check whether a VM named `$VM_NAME` already exists.
 
@@ -73,3 +74,4 @@ Setup SHALL always reach and display the connection-info summary (VM IP lookup c
 #### Scenario: Completing via an already-existing VM
 - **WHEN** setup completes by reusing an already-existing VM
 - **THEN** it displays the same connection-info summary using the VM's effective network mode, instead of exiting with an error
+

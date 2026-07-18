@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-Define the QEMU package prerequisites for running and cleaning up the local Debian VM setup on apt-based Ubuntu hosts.
-## Requirements
 ### Requirement: Install concrete QEMU prerequisites
 The Debian VM setup script SHALL install `qemu-system-x86` and `qemu-utils` through APT and SHALL NOT request `qemu-kvm` as an install target.
 
@@ -12,11 +10,3 @@ The Debian VM setup script SHALL install `qemu-system-x86` and `qemu-utils` thro
 #### Scenario: Setup resizes the virtual disk
 - **WHEN** setup reaches the disk-resize step
 - **THEN** `qemu-img` is available from the explicitly declared `qemu-utils` dependency
-
-### Requirement: Clean up declared QEMU prerequisites
-The cleanup script SHALL include `qemu-system-x86` and `qemu-utils` in its purge list when the user confirms package removal.
-
-#### Scenario: User confirms dependency cleanup
-- **WHEN** the cleanup script is run and the user confirms package removal
-- **THEN** it requests purge of the concrete QEMU system emulator and image utility packages installed by setup
-

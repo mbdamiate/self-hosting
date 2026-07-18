@@ -1,9 +1,10 @@
+# vm-port-forward-reapplication Specification
+
 ## Purpose
 
 Make `--forward` port-forwarding rule application idempotent and officially supported against an already-existing NAT-family VM, so re-running setup does not create duplicate `iptables` rules and can be used to (re)apply forwarding after the fact.
 
 ## Requirements
-
 ### Requirement: Apply port-forwarding rules idempotently
 The setup script SHALL avoid creating duplicate `iptables` DNAT/FORWARD rules when the same `--forward` rule is applied more than once.
 
@@ -25,3 +26,4 @@ Setup SHALL apply `--forward` rules against an already-existing VM, provided its
 #### Scenario: Forward requested for a bridged VM
 - **WHEN** `--forward` is passed but the target VM's effective network mode is bridged
 - **THEN** setup skips forwarding rule application and explains that port forwarding requires the NAT network
+
