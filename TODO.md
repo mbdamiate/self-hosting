@@ -2,7 +2,6 @@
 
 ## Pending
 - [ ] Review the VM setup and cleanup scripts for inconsistencies
-- [ ] Fix debian-vm-cleanup.sh step ordering so removing the default libvirt network (step 5) doesn't silently no-op because packages (step 3, which removes the virsh binary) are purged first
 - [ ] Create an explanatory README.md
 
 ## Done
