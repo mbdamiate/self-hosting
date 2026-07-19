@@ -73,6 +73,8 @@ STATIC_IP=""
 ADMIN_PASSWORD_REQUESTED=0
 ADMIN_PASSWORD_VALUE=""
 NO_AUTO_UPDATES=0
+ALLOW_PORTS=""
+NO_GUEST_FIREWALL=0
 
 print_help() {
     cat <<HELP
@@ -115,6 +117,15 @@ Options:
                       unattended-upgrades, restricted to the security origin,
                       with automatic reboot left off. Use this for a pinned,
                       reproducible package snapshot instead.
+  --allow-port=PORT[,PORT...]
+                      Open additional guest-side TCP ports through the VM's
+                      firewall (ufw), on top of SSH (always allowed) and any
+                      VM-side ports from --forward (allowed automatically).
+                      No effect when combined with --no-guest-firewall.
+  --no-guest-firewall Skip installing/enabling ufw inside the VM. By default,
+                      freshly created VMs get a default-deny inbound / allow
+                      outbound firewall (SSH always allowed). fail2ban's sshd
+                      jail is unaffected by this flag — it's always enabled.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -156,6 +167,12 @@ for arg in "$@"; do
             ;;
         --no-auto-updates)
             NO_AUTO_UPDATES=1
+            ;;
+        --allow-port=*)
+            ALLOW_PORTS="${arg#*=}"
+            ;;
+        --no-guest-firewall)
+            NO_GUEST_FIREWALL=1
             ;;
         -h|--help)
             print_help
@@ -561,6 +578,62 @@ ${UU_WRITE_FILES}"
     fi
 
     # ============================================================
+    # 7.4 Guest firewall (ufw, default-deny, on by default) and
+    #     fail2ban's sshd jail (always on, independent of the flag)
+    # ============================================================
+    GUEST_FIREWALL_POLICY="disabled"
+    if [ "$NO_GUEST_FIREWALL" -eq 0 ]; then
+        GUEST_FIREWALL_POLICY="enabled"
+
+        GUEST_FW_PORTS="22"
+        if [ -n "$ALLOW_PORTS" ]; then
+            GUEST_FW_PORTS="${GUEST_FW_PORTS},${ALLOW_PORTS}"
+        fi
+        if [ -n "$FORWARD_RULES" ]; then
+            IFS=',' read -ra FWD_RULES_FOR_FW_ARR <<< "$FORWARD_RULES"
+            for rule in "${FWD_RULES_FOR_FW_ARR[@]}"; do
+                FWD_VM_PORT="${rule##*:}"
+                # Skip malformed rules (e.g. a trailing colon with no port)
+                # instead of feeding an empty/non-numeric entry into ufw.
+                if [[ "$FWD_VM_PORT" =~ ^[0-9]+$ ]]; then
+                    GUEST_FW_PORTS="${GUEST_FW_PORTS},${FWD_VM_PORT}"
+                fi
+            done
+        fi
+        GUEST_FW_PORTS=$(echo "$GUEST_FW_PORTS" | tr ',' '\n' | sort -n -u | tr '\n' ',' | sed 's/,$//')
+
+        echo "==> Enabling guest firewall (ufw), allowed ports: ${GUEST_FW_PORTS}..."
+        CLOUDINIT_PACKAGES="${CLOUDINIT_PACKAGES}
+  - ufw"
+        CLOUDINIT_RUNCMD="${CLOUDINIT_RUNCMD}
+  - ufw default deny incoming
+  - ufw default allow outgoing"
+        IFS=',' read -ra GUEST_FW_PORTS_ARR <<< "$GUEST_FW_PORTS"
+        for port in "${GUEST_FW_PORTS_ARR[@]}"; do
+            CLOUDINIT_RUNCMD="${CLOUDINIT_RUNCMD}
+  - ufw allow ${port}/tcp"
+        done
+        CLOUDINIT_RUNCMD="${CLOUDINIT_RUNCMD}
+  - ufw --force enable"
+    fi
+    echo "$GUEST_FIREWALL_POLICY" > "${WORK_DIR}/.guest-firewall-policy"
+
+    echo "==> Enabling fail2ban's sshd jail (always on)..."
+    CLOUDINIT_PACKAGES="${CLOUDINIT_PACKAGES}
+  - fail2ban"
+    F2B_WRITE_FILES=$(cat <<'BLOCK'
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [sshd]
+      enabled = true
+BLOCK
+)
+    CLOUDINIT_WRITE_FILES="${CLOUDINIT_WRITE_FILES}
+${F2B_WRITE_FILES}"
+    CLOUDINIT_RUNCMD="${CLOUDINIT_RUNCMD}
+  - systemctl enable --now fail2ban"
+
+    # ============================================================
     # 8. Creating the cloud-init configuration (user-data / meta-data)
     # ============================================================
     echo "==> Generating cloud-init configuration..."
@@ -634,6 +707,13 @@ EOF
         echo "NOTE: security-origin updates will be applied automatically inside the VM"
         echo "      (unattended-upgrades). Kernel/library updates that require a reboot do"
         echo "      NOT reboot automatically — check and reboot manually when needed."
+    fi
+
+    if [ "$GUEST_FIREWALL_POLICY" = "enabled" ]; then
+        echo ""
+        echo "NOTE: the guest firewall (ufw) is active, default-deny inbound. Allowed TCP"
+        echo "      ports: ${GUEST_FW_PORTS}. Use --allow-port=PORT[,PORT...] to open more"
+        echo "      at creation time. fail2ban's sshd jail is also active."
     fi
 else
     echo ""
@@ -795,6 +875,19 @@ if [ -n "$FORWARD_RULES" ]; then
             fi
         done
 
+        if [ "$VM_EXISTS" -eq 1 ] && [ -f "${WORK_DIR}/.guest-firewall-policy" ]; then
+            RECORDED_GUEST_FW_POLICY=$(cat "${WORK_DIR}/.guest-firewall-policy")
+            if [ "$RECORDED_GUEST_FW_POLICY" = "enabled" ]; then
+                echo ""
+                echo "WARNING: this VM's guest firewall (ufw) was enabled at creation, but its allow"
+                echo "         list can't be updated by rerunning this script (cloud-init only applies"
+                echo "         at first boot). The newly forwarded port(s) may still be blocked inside"
+                echo "         the guest. Allow them manually, e.g. over SSH:"
+                for rule in "${RULES_ARR[@]}"; do
+                    echo "           ssh ${VM_USER}@${VM_IP} sudo ufw allow ${rule##*:}/tcp"
+                done
+            fi
+        fi
 
         echo ""
         echo "NOTE: these iptables rules are NOT persistent across host reboots."
