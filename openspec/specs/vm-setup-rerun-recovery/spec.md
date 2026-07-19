@@ -3,7 +3,6 @@
 ## Purpose
 
 Allow the VM setup script to be re-run safely against an already-existing VM: detect the existing VM instead of failing, determine its effective network mode from libvirt rather than trusting the current invocation's flags, and reach a working connection-info summary regardless of whether the VM was freshly created or reused.
-
 ## Requirements
 ### Requirement: Detect an existing VM before disk and cloud-init work
 Before performing SSH key handling, disk image download/copy/resize, or cloud-init generation, setup SHALL check whether a VM named `$VM_NAME` already exists.
@@ -74,4 +73,48 @@ Setup SHALL always reach and display the connection-info summary (VM IP lookup c
 #### Scenario: Completing via an already-existing VM
 - **WHEN** setup completes by reusing an already-existing VM
 - **THEN** it displays the same connection-info summary using the VM's effective network mode, instead of exiting with an error
+
+### Requirement: Determine effective watchdog configuration by inspecting the VM
+Setup SHALL determine a VM's effective watchdog configuration by inspecting its libvirt domain definition, not by trusting the `--watchdog` flag passed on the current invocation.
+
+#### Scenario: VM's domain definition includes a watchdog device
+- **WHEN** `virsh dumpxml` for the VM reports a `<watchdog>` device
+- **THEN** setup treats the VM's effective watchdog configuration as enabled
+
+#### Scenario: VM's domain definition has no watchdog device
+- **WHEN** `virsh dumpxml` for the VM reports no `<watchdog>` device
+- **THEN** setup treats the VM's effective watchdog configuration as disabled
+
+### Requirement: Warn without failing on watchdog mismatch
+When reusing an already-existing VM, setup SHALL warn rather than fail if the requested `--watchdog` flag conflicts with the VM's effective watchdog configuration, and SHALL continue using the effective configuration.
+
+#### Scenario: Watchdog requested but VM has none
+- **WHEN** `--watchdog` is passed and an already-existing VM's effective watchdog configuration is disabled
+- **THEN** setup prints a warning that watchdog configuration is fixed at creation, states that the VM has no watchdog device, points to `virsh undefine --remove-all-storage` as how to change it, and continues without a watchdog
+
+#### Scenario: Watchdog not requested but VM has one
+- **WHEN** `--watchdog` is not passed and an already-existing VM's effective watchdog configuration is enabled
+- **THEN** setup prints a warning that watchdog configuration is fixed at creation, states that the VM already has a watchdog device, points to `virsh undefine --remove-all-storage` as how to change it, and continues with the existing watchdog device still in place
+
+### Requirement: Determine effective on_crash policy by inspecting the VM
+Setup SHALL determine a VM's effective `on_crash` policy by inspecting its libvirt domain definition, not by trusting the `--no-crash-restart` flag passed on the current invocation.
+
+#### Scenario: VM's domain definition sets on_crash to restart
+- **WHEN** `virsh dumpxml` for the VM reports `<on_crash>restart</on_crash>`
+- **THEN** setup treats the VM's effective crash-recovery policy as enabled
+
+#### Scenario: VM's domain definition does not set on_crash to restart
+- **WHEN** `virsh dumpxml` for the VM does not report `<on_crash>restart</on_crash>`
+- **THEN** setup treats the VM's effective crash-recovery policy as disabled
+
+### Requirement: Warn without failing on crash-recovery policy mismatch
+When reusing an already-existing VM, setup SHALL warn rather than fail if the requested `--no-crash-restart` flag conflicts with the VM's effective crash-recovery policy, and SHALL continue using the effective policy.
+
+#### Scenario: Restart requested (flag omitted) but VM was created without it
+- **WHEN** `--no-crash-restart` is not passed and an already-existing VM's effective crash-recovery policy is disabled
+- **THEN** setup prints a warning that crash-recovery policy is fixed at creation, states that the VM will stay stopped on a crash, points to `virsh undefine --remove-all-storage` as how to change it, and continues without altering the running VM
+
+#### Scenario: Opt-out requested but VM already has restart enabled
+- **WHEN** `--no-crash-restart` is passed and an already-existing VM's effective crash-recovery policy is enabled
+- **THEN** setup prints a warning that crash-recovery policy is fixed at creation, states that the VM already restarts automatically on crash, points to `virsh undefine --remove-all-storage` as how to change it, and continues without altering the running VM
 

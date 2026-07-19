@@ -78,6 +78,7 @@ NO_GUEST_FIREWALL=0
 HARDEN_HOST_FIREWALL=0
 MONITOR=0
 WATCHDOG=0
+NO_CRASH_RESTART=0
 
 print_help() {
     cat <<HELP
@@ -150,6 +151,11 @@ Options:
                       automatic VM reset. Distinct from on_crash (QEMU
                       process crash) and vm-uptime-monitoring (detects and
                       alerts, doesn't act). Fixed at VM creation.
+  --no-crash-restart  Disable automatic restart when the QEMU process itself
+                      crashes (on_crash). By default, freshly created VMs
+                      set on_crash=restart, since a genuine process crash has
+                      no false-positive risk. Use this to leave a crashed VM
+                      stopped for inspection instead. Fixed at VM creation.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -206,6 +212,9 @@ for arg in "$@"; do
             ;;
         --watchdog)
             WATCHDOG=1
+            ;;
+        --no-crash-restart)
+            NO_CRASH_RESTART=1
             ;;
         -h|--help)
             print_help
@@ -940,6 +949,10 @@ EOF
         echo "==> Attaching a virtual watchdog device (i6300esb, action=reset)..."
         VIRT_INSTALL_EXTRA_ARGS+=(--watchdog "model=i6300esb,action=reset")
     fi
+    if [ "$NO_CRASH_RESTART" -eq 0 ]; then
+        echo "==> Enabling automatic restart on QEMU crash (on_crash=restart)..."
+        VIRT_INSTALL_EXTRA_ARGS+=(--events "on_crash=restart")
+    fi
 
     virt-install \
         --name "$VM_NAME" \
@@ -1029,6 +1042,14 @@ if virsh dumpxml "$VM_NAME" 2>/dev/null | grep -q '<watchdog'; then
 fi
 
 # ============================================================
+# 10.3 Effective on_crash policy introspection
+# ============================================================
+EFFECTIVE_CRASH_RESTART=0
+if virsh dumpxml "$VM_NAME" 2>/dev/null | grep -q '<on_crash>restart</on_crash>'; then
+    EFFECTIVE_CRASH_RESTART=1
+fi
+
+# ============================================================
 # 10.4 Effective log-forwarding configuration introspection
 # ============================================================
 EFFECTIVE_LOG_FORWARDING=""
@@ -1100,6 +1121,24 @@ if [ "$VM_EXISTS" -eq 1 ]; then
         echo "         remove the VM first and run again:"
         echo "           virsh undefine ${VM_NAME} --remove-all-storage"
         echo "         Continuing with the VM's actual watchdog configuration."
+    fi
+
+    REQUESTED_CRASH_RESTART=1
+    [ "$NO_CRASH_RESTART" -eq 1 ] && REQUESTED_CRASH_RESTART=0
+    if [ "$REQUESTED_CRASH_RESTART" -ne "$EFFECTIVE_CRASH_RESTART" ]; then
+        echo ""
+        if [ "$EFFECTIVE_CRASH_RESTART" -eq 1 ]; then
+            echo "WARNING: VM '${VM_NAME}' already exists with on_crash=restart,"
+            echo "         but this run requested --no-crash-restart."
+        else
+            echo "WARNING: VM '${VM_NAME}' already exists without on_crash=restart,"
+            echo "         but this run did not request --no-crash-restart."
+        fi
+        echo "         Crash-recovery policy is fixed when the VM is created and cannot be"
+        echo "         changed by rerunning this script. To use a different policy, remove"
+        echo "         the VM first and run again:"
+        echo "           virsh undefine ${VM_NAME} --remove-all-storage"
+        echo "         Continuing with the VM's actual crash-recovery policy."
     fi
 
     if [ "$MONITOR" -eq 1 ] && [ -z "$BRIDGE_IFACE" ] && [ "$EFFECTIVE_LOG_FORWARDING" != "1" ]; then
