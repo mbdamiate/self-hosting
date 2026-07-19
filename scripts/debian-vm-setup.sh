@@ -76,6 +76,7 @@ NO_AUTO_UPDATES=0
 ALLOW_PORTS=""
 NO_GUEST_FIREWALL=0
 HARDEN_HOST_FIREWALL=0
+MONITOR=0
 
 print_help() {
     cat <<HELP
@@ -134,6 +135,14 @@ Options:
                       kept permissive so libvirt NAT and --forward keep
                       working. Host-wide, opt-in, idempotent — independent of
                       which VM is being created.
+  --monitor           Enable host-side uptime monitoring (systemd timer,
+                      checks domstate + SSH reachability every ~2 minutes),
+                      local alerting (journal + wall + motd, no
+                      network/email), and — for NAT-family VMs only, not
+                      --bridge — centralized log forwarding to
+                      /var/log/self-hosting-vms/<hostname>/ on the host.
+                      Host-wide infrastructure installs once; each VM gets
+                      its own monitoring timer instance.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -184,6 +193,9 @@ for arg in "$@"; do
             ;;
         --harden-host-firewall)
             HARDEN_HOST_FIREWALL=1
+            ;;
+        --monitor)
+            MONITOR=1
             ;;
         -h|--help)
             print_help
@@ -447,6 +459,149 @@ if [ "$HARDEN_HOST_FIREWALL" -eq 1 ]; then
 fi
 
 # ============================================================
+# 4.2 Monitoring infrastructure (opt-in via --monitor, host-wide,
+#     idempotent — independent of which VM is being created/reused)
+# ============================================================
+MONITOR_LOG_PORT=5140
+if [ "$MONITOR" -eq 1 ]; then
+    echo "==> Installing host-wide monitoring infrastructure..."
+
+    echo "==> Installing the uptime health-check script..."
+    sudo tee /usr/local/bin/self-hosting-vm-uptime-check >/dev/null <<'SCRIPT'
+#!/usr/bin/env bash
+# self-hosting-vm-uptime-check <vm-name>
+# Checks whether a VM is up (domstate running AND SSH port reachable) and
+# alerts locally (journal + wall) only on an up<->down transition.
+set -uo pipefail
+NAME="$1"
+STATE_DIR="/run/self-hosting-vm-uptime"
+STATE_FILE="${STATE_DIR}/${NAME}.state"
+mkdir -p "$STATE_DIR"
+
+DOMSTATE=$(virsh domstate "$NAME" 2>/dev/null || echo "unknown")
+STATUS="down"
+if [ "$DOMSTATE" = "running" ]; then
+    VM_IP=$(virsh domifaddr "$NAME" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n1)
+    if [ -n "$VM_IP" ] && timeout 3 bash -c "echo > /dev/tcp/${VM_IP}/22" 2>/dev/null; then
+        STATUS="up"
+    fi
+fi
+
+PREV_STATUS=""
+if [ -f "$STATE_FILE" ]; then
+    PREV_STATUS=$(cat "$STATE_FILE")
+fi
+
+if [ -n "$PREV_STATUS" ] && [ "$PREV_STATUS" != "$STATUS" ]; then
+    if [ "$STATUS" = "down" ]; then
+        MSG="VM '${NAME}' is DOWN (domstate=${DOMSTATE}, SSH unreachable)"
+    else
+        MSG="VM '${NAME}' has RECOVERED (up)"
+    fi
+    logger -t self-hosting-alert "$MSG"
+    wall "self-hosting-alert: ${MSG}" 2>/dev/null || true
+fi
+
+echo "$STATUS" > "$STATE_FILE"
+SCRIPT
+    sudo chmod 755 /usr/local/bin/self-hosting-vm-uptime-check
+
+    echo "==> Installing the uptime timer/service templates..."
+    sudo tee /etc/systemd/system/self-hosting-vm-uptime@.service >/dev/null <<'UNIT'
+[Unit]
+Description=self-hosting uptime check for VM %i
+After=libvirtd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/self-hosting-vm-uptime-check %i
+UNIT
+
+    sudo tee /etc/systemd/system/self-hosting-vm-uptime@.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Periodic self-hosting uptime check for VM %i
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Unit=self-hosting-vm-uptime@%i.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+    echo "==> Installing the login alert summary (update-motd.d)..."
+    sudo tee /etc/update-motd.d/95-self-hosting-alerts >/dev/null <<'MOTD'
+#!/usr/bin/env bash
+RECENT=$(journalctl -t self-hosting-alert -n 5 --no-pager --since "-24 hours" 2>/dev/null)
+if [ -n "$RECENT" ]; then
+    echo ""
+    echo "Recent self-hosting alerts:"
+    echo "$RECENT"
+    echo ""
+fi
+MOTD
+    sudo chmod 755 /etc/update-motd.d/95-self-hosting-alerts
+
+    sudo systemctl daemon-reload
+
+    echo "==> Installing log storage and rotation..."
+    sudo mkdir -p /var/log/self-hosting-vms
+    sudo tee /etc/logrotate.d/self-hosting-vms >/dev/null <<'LOGROTATE'
+/var/log/self-hosting-vms/*/*.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE
+
+    VIRBR0_IP=$(ip -4 addr show virbr0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)
+    if [ -n "$VIRBR0_IP" ]; then
+        echo "==> Installing the centralized-logging receiver (bound to virbr0: ${VIRBR0_IP})..."
+        if ! command -v rsyslogd >/dev/null 2>&1; then
+            sudo apt install -y rsyslog
+        fi
+        sudo tee /etc/rsyslog.d/60-self-hosting-vm-receiver.conf >/dev/null <<RSYSLOG
+module(load="imtcp")
+input(type="imtcp" port="${MONITOR_LOG_PORT}" address="${VIRBR0_IP}")
+
+template(name="selfHostingVMPerHost" type="string" string="/var/log/self-hosting-vms/%HOSTNAME%/messages.log")
+if \$inputname == "imtcp" then {
+    action(type="omfile" dynaFile="selfHostingVMPerHost" createDirs="on")
+    stop
+}
+RSYSLOG
+        sudo systemctl restart rsyslog
+
+    else
+        echo "    NOTE: virbr0 not found (no NAT-family VM has been set up yet on this host)."
+        echo "          Centralized logging will start working once one is; uptime monitoring"
+        echo "          is unaffected."
+    fi
+    echo "    OK: monitoring infrastructure ready."
+fi
+
+# ============================================================
+# 4.3 Log receiver firewall rule (order-independent re-check).
+#     Runs every invocation, regardless of --monitor/--harden-host-firewall
+#     on THIS run, so the rule self-heals no matter which flag was used to
+#     enable ufw and which run originally installed the receiver: e.g.
+#     `--monitor` today, `--harden-host-firewall` (no --monitor) later would
+#     otherwise newly default-deny the receiver's port with nothing to
+#     re-add the exception for it.
+# ============================================================
+if [ -f /etc/rsyslog.d/60-self-hosting-vm-receiver.conf ] && command -v ufw >/dev/null 2>&1 \
+    && sudo ufw status | grep -q "^Status: active"; then
+    if ! sudo ufw status | grep -q "${MONITOR_LOG_PORT}/tcp.*virbr0"; then
+        echo "==> Ensuring the log receiver's firewall rule is present..."
+        sudo ufw allow in on virbr0 to any port "${MONITOR_LOG_PORT}" proto tcp
+    fi
+fi
+
+# ============================================================
 # 5. VM existence check
 # ============================================================
 echo "==> Checking if a VM with this name already exists..."
@@ -683,6 +838,27 @@ ${F2B_WRITE_FILES}"
   - systemctl enable --now fail2ban"
 
     # ============================================================
+    # 7.5 Centralized logging (guest-side forwarding, NAT-family only —
+    #     --bridge's macvtap isolation means the guest can't reach virbr0)
+    # ============================================================
+    LOG_FORWARDING_CONFIGURED=0
+    if [ "$MONITOR" -eq 1 ] && [ -z "$BRIDGE_IFACE" ] && [ -n "${VIRBR0_IP:-}" ]; then
+        echo "==> Configuring guest log forwarding to ${VIRBR0_IP}:${MONITOR_LOG_PORT}..."
+        CLOUDINIT_PACKAGES="${CLOUDINIT_PACKAGES}
+  - rsyslog"
+        LOG_FWD_WRITE_FILES=$(cat <<BLOCK
+  - path: /etc/rsyslog.d/60-forward-to-host.conf
+    content: |
+      *.* @@${VIRBR0_IP}:${MONITOR_LOG_PORT}
+BLOCK
+)
+        CLOUDINIT_WRITE_FILES="${CLOUDINIT_WRITE_FILES}
+${LOG_FWD_WRITE_FILES}"
+        LOG_FORWARDING_CONFIGURED=1
+    fi
+    echo "$LOG_FORWARDING_CONFIGURED" > "${WORK_DIR}/.log-forwarding-configured"
+
+    # ============================================================
     # 8. Creating the cloud-init configuration (user-data / meta-data)
     # ============================================================
     echo "==> Generating cloud-init configuration..."
@@ -764,6 +940,19 @@ EOF
         echo "      ports: ${GUEST_FW_PORTS}. Use --allow-port=PORT[,PORT...] to open more"
         echo "      at creation time. fail2ban's sshd jail is also active."
     fi
+
+    if [ "$MONITOR" -eq 1 ]; then
+        echo ""
+        echo "NOTE: uptime monitoring is active for '${VM_NAME}' (checks every ~2 minutes)."
+        echo "      Alerts go to the host journal (journalctl -t self-hosting-alert), a wall"
+        echo "      broadcast, and the host's login banner — no remote/email notification."
+        if [ "$LOG_FORWARDING_CONFIGURED" -eq 1 ]; then
+            echo "      Logs are forwarded to /var/log/self-hosting-vms/${VM_HOSTNAME}/ on the host."
+        elif [ -n "$BRIDGE_IFACE" ]; then
+            echo "      Centralized logging is NOT available in bridged mode (macvtap isolation);"
+            echo "      only uptime monitoring applies."
+        fi
+    fi
 else
     echo ""
     echo "=================================================="
@@ -797,6 +986,14 @@ fi
 EFFECTIVE_ADMIN_SUDO_POLICY=""
 if [ -f "${WORK_DIR}/.admin-sudo-policy" ]; then
     EFFECTIVE_ADMIN_SUDO_POLICY=$(cat "${WORK_DIR}/.admin-sudo-policy")
+fi
+
+# ============================================================
+# 10.4 Effective log-forwarding configuration introspection
+# ============================================================
+EFFECTIVE_LOG_FORWARDING=""
+if [ -f "${WORK_DIR}/.log-forwarding-configured" ]; then
+    EFFECTIVE_LOG_FORWARDING=$(cat "${WORK_DIR}/.log-forwarding-configured")
 fi
 
 # ============================================================
@@ -850,6 +1047,16 @@ if [ "$VM_EXISTS" -eq 1 ]; then
     fi
 
 
+    if [ "$MONITOR" -eq 1 ] && [ -z "$BRIDGE_IFACE" ] && [ "$EFFECTIVE_LOG_FORWARDING" != "1" ]; then
+        echo ""
+        echo "WARNING: --monitor was requested, but log forwarding for VM '${VM_NAME}' was not"
+        echo "         configured at creation (cloud-init only applies at first boot) — it"
+        echo "         predates --monitor, was created with --bridge, or virbr0 didn't exist yet."
+        echo "         Uptime monitoring still applies (host-side, reapplied below), but logs"
+        echo "         from this VM will NOT reach /var/log/self-hosting-vms/. To fix, remove"
+        echo "         and recreate the VM: virsh undefine ${VM_NAME} --remove-all-storage"
+    fi
+
     VM_STATE=$(virsh domstate "$VM_NAME" 2>/dev/null || echo "unknown")
     if [ "$VM_STATE" != "running" ]; then
         echo "==> VM '${VM_NAME}' is currently '${VM_STATE}', starting it..."
@@ -871,6 +1078,15 @@ if ! virsh autostart "$VM_NAME" >/dev/null 2>&1; then
     echo "         virsh autostart ${VM_NAME}"
 fi
 
+# ============================================================
+# 12.1 Per-VM uptime monitoring timer instance (host-side, so unlike
+#      cloud-init-driven features this can be (re)applied on reruns too)
+# ============================================================
+if [ "$MONITOR" -eq 1 ]; then
+    echo "==> Enabling the uptime monitoring timer for '${VM_NAME}'..."
+    sudo systemctl enable --now "self-hosting-vm-uptime@${VM_NAME}.timer" >/dev/null 2>&1 || \
+        echo "WARNING: failed to enable the uptime monitoring timer for '${VM_NAME}'."
+fi
 
 echo ""
 echo "Waiting for the VM to report a DHCP IP..."

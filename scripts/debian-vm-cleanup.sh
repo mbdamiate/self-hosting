@@ -154,6 +154,11 @@ if command -v virsh >/dev/null 2>&1 && virsh dominfo "$VM_NAME" >/dev/null 2>&1;
             || echo "WARNING: could not remove it automatically. Check manually with 'virsh list --all'."
         echo "    VM removed."
 
+        if systemctl list-unit-files "self-hosting-vm-uptime@.timer" >/dev/null 2>&1 \
+            && systemctl is-enabled "self-hosting-vm-uptime@${VM_NAME}.timer" >/dev/null 2>&1; then
+            echo "==> Disabling the uptime monitoring timer for '${VM_NAME}' (logs are preserved)..."
+            sudo systemctl disable --now "self-hosting-vm-uptime@${VM_NAME}.timer" >/dev/null 2>&1 || true
+        fi
     else
         echo "==> Skipping VM removal."
     fi
@@ -216,6 +221,67 @@ if [ "$VM_ONLY" -ne 1 ]; then
     echo ""
 fi
 
+# ============================================================
+# 1.6 Monitoring/logging infrastructure (host-wide)
+#     Per-VM removal already happened in step 1 above (timer instance
+#     disabled, logs left in place). This removes the shared template
+#     units, the log receiver, its firewall rule, and the motd script.
+#     Log deletion is asked separately, even under --purge-all.
+# ============================================================
+if [ "$VM_ONLY" -ne 1 ]; then
+    if [ -f /etc/systemd/system/self-hosting-vm-uptime@.timer ] || [ -f /etc/rsyslog.d/60-self-hosting-vm-receiver.conf ] || [ -f /etc/update-motd.d/95-self-hosting-alerts ]; then
+        if confirm "Remove the host-wide monitoring/logging infrastructure (timer templates, log receiver, motd script)?"; then
+            echo "==> Removing the uptime monitoring timer/service templates..."
+            sudo rm -f /etc/systemd/system/self-hosting-vm-uptime@.service /etc/systemd/system/self-hosting-vm-uptime@.timer
+            sudo systemctl daemon-reload 2>/dev/null || true
+            sudo rm -f /usr/local/bin/self-hosting-vm-uptime-check
+
+            if [ -f /etc/rsyslog.d/60-self-hosting-vm-receiver.conf ]; then
+                echo "==> Removing the log receiver..."
+                sudo rm -f /etc/rsyslog.d/60-self-hosting-vm-receiver.conf
+                sudo systemctl restart rsyslog 2>/dev/null || true
+            fi
+
+            if command -v ufw >/dev/null 2>&1; then
+                MONITOR_RULE_NUM=$(sudo ufw status numbered 2>/dev/null | grep "5140/tcp" | grep -oP '^\[\s*\K[0-9]+' | head -n1)
+                if [ -n "$MONITOR_RULE_NUM" ]; then
+                    echo "==> Removing the log receiver's firewall rule..."
+                    sudo ufw --force delete "$MONITOR_RULE_NUM"
+                fi
+            fi
+
+            sudo rm -f /etc/logrotate.d/self-hosting-vms
+            sudo rm -f /etc/update-motd.d/95-self-hosting-alerts
+            echo "    Done."
+        else
+            echo "==> Skipping monitoring/logging infrastructure removal."
+        fi
+    else
+        echo "==> No monitoring/logging infrastructure found, skipping."
+    fi
+    echo ""
+
+    if [ -d /var/log/self-hosting-vms ]; then
+        # Deliberately prompts even under --purge-all (this is the one
+        # confirmation it still asks for). `read` fails on closed/non-tty
+        # stdin (cron, CI, piped input) — pre-initializing the variable and
+        # tolerating that failure means a non-interactive run defaults to
+        # "keep logs" and continues, instead of aborting under `set -e`
+        # partway through cleanup.
+        LOG_DELETE_RESP=""
+        read -r -p "Delete accumulated VM logs under /var/log/self-hosting-vms? [y/N] " LOG_DELETE_RESP || true
+        case "$LOG_DELETE_RESP" in
+            [yY]|[yY][eE][sS])
+                sudo rm -rf /var/log/self-hosting-vms
+                echo "    Logs deleted."
+                ;;
+            *)
+                echo "==> Keeping /var/log/self-hosting-vms."
+                ;;
+        esac
+        echo ""
+    fi
+fi
 
 # ============================================================
 # 2. libvirt's default network (optional)
