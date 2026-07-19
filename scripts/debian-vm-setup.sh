@@ -72,6 +72,7 @@ FORWARD_RULES=""
 STATIC_IP=""
 ADMIN_PASSWORD_REQUESTED=0
 ADMIN_PASSWORD_VALUE=""
+NO_AUTO_UPDATES=0
 
 print_help() {
     cat <<HELP
@@ -109,6 +110,11 @@ Options:
                       already established. Only applies at VM creation;
                       rerunning against an existing VM cannot change it.
                       Default: passwordless sudo (NOPASSWD:ALL).
+  --no-auto-updates   Disable automatic security updates inside the VM.
+                      By default, freshly created VMs install and enable
+                      unattended-upgrades, restricted to the security origin,
+                      with automatic reboot left off. Use this for a pinned,
+                      reproducible package snapshot instead.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -147,6 +153,9 @@ for arg in "$@"; do
         --admin-password=*)
             ADMIN_PASSWORD_REQUESTED=1
             ADMIN_PASSWORD_VALUE="${arg#*=}"
+            ;;
+        --no-auto-updates)
+            NO_AUTO_UPDATES=1
             ;;
         -h|--help)
             print_help
@@ -518,9 +527,48 @@ if [ "$VM_EXISTS" -eq 0 ]; then
     echo "$ADMIN_SUDO_POLICY" > "${WORK_DIR}/.admin-sudo-policy"
 
     # ============================================================
+    # 7.2 cloud-init accumulators (extra packages/runcmd/write_files
+    #     appended to by the sections below; qemu-guest-agent is the
+    #     baseline every VM gets regardless of flags)
+    # ============================================================
+    CLOUDINIT_PACKAGES="  - qemu-guest-agent"
+    CLOUDINIT_RUNCMD="  - systemctl enable --now qemu-guest-agent"
+    CLOUDINIT_WRITE_FILES=""
+
+    # ============================================================
+    # 7.3 Automatic security updates (unattended-upgrades, on by default)
+    # ============================================================
+    if [ "$NO_AUTO_UPDATES" -eq 0 ]; then
+        echo "==> Enabling automatic security updates (unattended-upgrades)..."
+        CLOUDINIT_PACKAGES="${CLOUDINIT_PACKAGES}
+  - unattended-upgrades"
+        UU_WRITE_FILES=$(cat <<'BLOCK'
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  - path: /etc/apt/apt.conf.d/51unattended-upgrades-security-only
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESM:${distro_codename}-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+BLOCK
+)
+        CLOUDINIT_WRITE_FILES="${CLOUDINIT_WRITE_FILES}
+${UU_WRITE_FILES}"
+    fi
+
+    # ============================================================
     # 8. Creating the cloud-init configuration (user-data / meta-data)
     # ============================================================
     echo "==> Generating cloud-init configuration..."
+
+    WRITE_FILES_SECTION=""
+    if [ -n "$CLOUDINIT_WRITE_FILES" ]; then
+        WRITE_FILES_SECTION="write_files:${CLOUDINIT_WRITE_FILES}"
+    fi
 
     cat > user-data <<EOF
 #cloud-config
@@ -538,7 +586,10 @@ ssh_pwauth: false
 package_update: true
 package_upgrade: false
 packages:
+${CLOUDINIT_PACKAGES}
+${WRITE_FILES_SECTION}
 runcmd:
+${CLOUDINIT_RUNCMD}
 EOF
 
     cat > meta-data <<EOF
@@ -578,6 +629,12 @@ EOF
     echo " VM '${VM_NAME}' created successfully!"
     echo "=================================================="
 
+    if [ "$NO_AUTO_UPDATES" -eq 0 ]; then
+        echo ""
+        echo "NOTE: security-origin updates will be applied automatically inside the VM"
+        echo "      (unattended-upgrades). Kernel/library updates that require a reboot do"
+        echo "      NOT reboot automatically — check and reboot manually when needed."
+    fi
 else
     echo ""
     echo "=================================================="
