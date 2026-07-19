@@ -8,14 +8,23 @@
 #                 (disk + cloud-init seed ISO), and its network reservation
 #                 (if any). Preserves the downloaded base cloud image,
 #                 installed packages, group membership, the default network,
-#                 and the QEMU storage ACL — so a rerun of debian-vm-setup.sh
-#                 is fast (no re-download, no reinstall).
+#                 the QEMU storage ACL, and any host firewall hardening from
+#                 --harden-host-firewall — so a rerun of debian-vm-setup.sh
+#                 is fast (no re-download, no reinstall). Disables the VM's
+#                 uptime monitoring timer (from --monitor) if any, but never
+#                 deletes its logs or backups.
 #   --purge-all   Non-interactive. Removes everything: the VM, the full
 #                 working directory (including the base image), installed
-#                 packages, group membership, the default network, and the
-#                 QEMU storage ACL granted on $HOME. Refuses to run if any
-#                 VM other than the one named by --name still exists, since
-#                 purging shared packages/network/groups would break it.
+#                 packages, group membership, the default network, the
+#                 QEMU storage ACL granted on $HOME, the host firewall
+#                 hardening tagged rule/forward policy from
+#                 --harden-host-firewall (ufw itself is left installed),
+#                 and the host-wide monitoring/logging infrastructure from
+#                 --monitor (asks separately whether to also delete
+#                 accumulated logs). Never deletes backup files. Refuses to
+#                 run if any VM other than the one named by --name still
+#                 exists, since purging shared packages/network/groups
+#                 would break it.
 #
 # Usage:
 #   chmod +x debian-vm-cleanup.sh
@@ -39,16 +48,22 @@ Options:
                VM when managing a fleet of VMs.
   --vm-only    Non-interactive. Removes only the named VM, its attached
                storage (disk + cloud-init seed ISO), and its network
-               reservation (if any). Preserves the downloaded base cloud
+               reservation (if any). Disables its uptime monitoring timer
+               (from --monitor) if any. Preserves the downloaded base cloud
                image, installed packages, group membership, the default
-               network, and the QEMU storage ACL — so a rerun of
+               network, the QEMU storage ACL, any host firewall hardening,
+               the VM's logs, and any backups — so a rerun of
                debian-vm-setup.sh is fast.
   --purge-all  Non-interactive. Removes everything: the VM, the full working
                directory (including the base image), installed packages,
-               group membership, the default network, and the QEMU storage
-               ACL on \$HOME. Refuses to run — before touching anything — if
-               any VM other than the one named by --name still exists;
-               remove those first with --vm-only (per VM).
+               group membership, the default network, the QEMU storage
+               ACL on \$HOME, the host firewall hardening tagged rule/
+               forward policy, and the host-wide monitoring/logging
+               infrastructure (ufw itself stays installed; log deletion is
+               asked separately; backups are never deleted). Refuses to
+               run — before touching anything — if any VM other than the
+               one named by --name still exists; remove those first with
+               --vm-only (per VM).
   -h, --help   Show this help.
 
 Without a flag, the script walks through each removal step interactively,
@@ -138,6 +153,7 @@ if command -v virsh >/dev/null 2>&1 && virsh dominfo "$VM_NAME" >/dev/null 2>&1;
             || virsh undefine "$VM_NAME" --remove-all-storage \
             || echo "WARNING: could not remove it automatically. Check manually with 'virsh list --all'."
         echo "    VM removed."
+
     else
         echo "==> Skipping VM removal."
     fi
@@ -163,6 +179,43 @@ if [ "$VM_ONLY" -eq 1 ] && command -v virsh >/dev/null 2>&1 && virsh net-info de
     fi
 fi
 echo ""
+
+# ============================================================
+# 1.5 Host firewall hardening (SSH baseline rule + forward policy)
+#     Host-wide state added by --harden-host-firewall; --vm-only never
+#     touches it. Only the tagged rule and forward-policy value are
+#     removed — ufw itself is left installed and enabled.
+# ============================================================
+if [ "$VM_ONLY" -ne 1 ]; then
+    UFW_SSH_TAG="self-hosting: host SSH baseline"
+    if command -v ufw >/dev/null 2>&1; then
+        if confirm "Remove the host firewall hardening this script may have added (SSH baseline rule + forward policy)?"; then
+            RULE_NUM=$(sudo ufw status numbered | grep -F "$UFW_SSH_TAG" | grep -oP '^\[\s*\K[0-9]+' | head -n1)
+            if [ -n "$RULE_NUM" ]; then
+                echo "==> Removing host SSH baseline rule..."
+                sudo ufw --force delete "$RULE_NUM"
+            else
+                echo "==> No tagged host SSH baseline rule found, nothing to remove."
+            fi
+
+            if grep -q '^DEFAULT_FORWARD_POLICY="ACCEPT"' /etc/default/ufw 2>/dev/null; then
+                echo "==> Reverting DEFAULT_FORWARD_POLICY to DROP..."
+                sudo sed -i 's/^DEFAULT_FORWARD_POLICY="ACCEPT"/DEFAULT_FORWARD_POLICY="DROP"/' /etc/default/ufw
+                sudo ufw reload 2>/dev/null || true
+            else
+                echo "==> DEFAULT_FORWARD_POLICY is already DROP, nothing to revert."
+            fi
+            echo "    Done. ufw itself was left installed and enabled — only the tagged rule"
+            echo "    and forward policy were touched."
+        else
+            echo "==> Skipping host firewall hardening removal."
+        fi
+    else
+        echo "==> ufw not installed, skipping host firewall hardening removal."
+    fi
+    echo ""
+fi
+
 
 # ============================================================
 # 2. libvirt's default network (optional)
@@ -266,9 +319,11 @@ echo "=================================================="
 echo ""
 if [ "$VM_ONLY" -eq 1 ]; then
     echo "Notes:"
-    echo "  - Only the VM and its attached storage were removed."
+    echo "  - Only the VM and its attached storage were removed (its monitoring timer,"
+    echo "    if any, was disabled too)."
     echo "  - The downloaded base cloud image, installed packages, group membership,"
-    echo "    the default network, and the QEMU storage ACL on \$HOME were left in place."
+    echo "    the default network, the QEMU storage ACL on \$HOME, any host firewall"
+    echo "    hardening, the VM's logs, and any backups were left in place."
     echo "  - Rerun debian-vm-setup.sh to recreate the VM without re-downloading or"
     echo "    reinstalling anything."
 else
@@ -276,6 +331,7 @@ else
     echo "  - If you removed the groups, log out/in for the change to fully apply."
     echo "  - Your SSH key in ~/.ssh was NOT deleted (it may be used elsewhere)."
     echo "  - If you skipped package removal, KVM/libvirt remain installed on the system."
+    echo "  - Any backups (debian-vm-backup.sh) were NOT touched — this script never deletes them."
     echo "  - If you used --forward in setup-debian-vps.sh, the iptables port-forwarding"
     echo "    rules were NOT removed automatically (this script can't tell which are yours)."
     echo "    List them with 'sudo iptables -t nat -L PREROUTING -n --line-numbers' and"

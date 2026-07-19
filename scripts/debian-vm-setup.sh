@@ -75,6 +75,7 @@ ADMIN_PASSWORD_VALUE=""
 NO_AUTO_UPDATES=0
 ALLOW_PORTS=""
 NO_GUEST_FIREWALL=0
+HARDEN_HOST_FIREWALL=0
 
 print_help() {
     cat <<HELP
@@ -126,6 +127,13 @@ Options:
                       freshly created VMs get a default-deny inbound / allow
                       outbound firewall (SSH always allowed). fail2ban's sshd
                       jail is unaffected by this flag — it's always enabled.
+  --harden-host-firewall
+                      Install and enable ufw on the HOST (not the VM), with a
+                      default-deny inbound / allow outbound policy. Host SSH
+                      is always allowed first. The forward-chain policy is
+                      kept permissive so libvirt NAT and --forward keep
+                      working. Host-wide, opt-in, idempotent — independent of
+                      which VM is being created.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -173,6 +181,9 @@ for arg in "$@"; do
             ;;
         --no-guest-firewall)
             NO_GUEST_FIREWALL=1
+            ;;
+        --harden-host-firewall)
+            HARDEN_HOST_FIREWALL=1
             ;;
         -h|--help)
             print_help
@@ -396,6 +407,44 @@ if ! sudo setfacl -m u:libvirt-qemu:--x "$HOME"; then
     exit 1
 fi
 echo "    OK: 'libvirt-qemu' can now traverse \$HOME (execute-only, no read/listing)."
+
+# ============================================================
+# 4.1 Host firewall hardening (opt-in, host-wide, idempotent —
+#     independent of which VM is being created/reused below)
+# ============================================================
+UFW_SSH_TAG="self-hosting: host SSH baseline"
+if [ "$HARDEN_HOST_FIREWALL" -eq 1 ]; then
+    echo "==> Hardening the host firewall (ufw)..."
+
+    if ! command -v ufw >/dev/null 2>&1; then
+        echo "==> Installing ufw..."
+        sudo apt install -y ufw
+    fi
+
+    if sudo ufw status | grep -qF "$UFW_SSH_TAG"; then
+        echo "    OK: host SSH baseline rule already present."
+    else
+        echo "==> Adding host SSH baseline rule (tcp/22)..."
+        sudo ufw allow 22/tcp comment "$UFW_SSH_TAG"
+    fi
+
+    if grep -q '^DEFAULT_FORWARD_POLICY="DROP"' /etc/default/ufw 2>/dev/null; then
+        echo "==> Setting DEFAULT_FORWARD_POLICY to ACCEPT (required for libvirt NAT / --forward)..."
+        sudo sed -i 's/^DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+        HOST_FORWARD_POLICY_CHANGED=1
+    else
+        echo "    OK: DEFAULT_FORWARD_POLICY is already permissive (or already ACCEPT)."
+    fi
+
+    if sudo ufw status | grep -q "^Status: active"; then
+        if [ "${HOST_FORWARD_POLICY_CHANGED:-0}" -eq 1 ]; then
+            sudo ufw reload
+        fi
+    else
+        sudo ufw --force enable
+    fi
+    echo "    OK: host firewall hardened (ufw active, host SSH allowed, forwarding preserved)."
+fi
 
 # ============================================================
 # 5. VM existence check
