@@ -77,6 +77,7 @@ ALLOW_PORTS=""
 NO_GUEST_FIREWALL=0
 HARDEN_HOST_FIREWALL=0
 MONITOR=0
+WATCHDOG=0
 
 print_help() {
     cat <<HELP
@@ -143,6 +144,12 @@ Options:
                       /var/log/self-hosting-vms/<hostname>/ on the host.
                       Host-wide infrastructure installs once; each VM gets
                       its own monitoring timer instance.
+  --watchdog          Attach a virtual watchdog device (i6300esb, action
+                      reset) and enable systemd's RuntimeWatchdogSec inside
+                      the guest, so an unresponsive kernel/PID 1 triggers an
+                      automatic VM reset. Distinct from on_crash (QEMU
+                      process crash) and vm-uptime-monitoring (detects and
+                      alerts, doesn't act). Fixed at VM creation.
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -196,6 +203,9 @@ for arg in "$@"; do
             ;;
         --monitor)
             MONITOR=1
+            ;;
+        --watchdog)
+            WATCHDOG=1
             ;;
         -h|--help)
             print_help
@@ -859,6 +869,22 @@ ${LOG_FWD_WRITE_FILES}"
     echo "$LOG_FORWARDING_CONFIGURED" > "${WORK_DIR}/.log-forwarding-configured"
 
     # ============================================================
+    # 7.6 Guest watchdog petting (systemd RuntimeWatchdogSec)
+    # ============================================================
+    if [ "$WATCHDOG" -eq 1 ]; then
+        echo "==> Configuring the guest to pet the virtual watchdog (systemd)..."
+        WD_WRITE_FILES=$(cat <<'BLOCK'
+  - path: /etc/systemd/system.conf.d/90-watchdog.conf
+    content: |
+      [Manager]
+      RuntimeWatchdogSec=20s
+BLOCK
+)
+        CLOUDINIT_WRITE_FILES="${CLOUDINIT_WRITE_FILES}
+${WD_WRITE_FILES}"
+    fi
+
+    # ============================================================
     # 8. Creating the cloud-init configuration (user-data / meta-data)
     # ============================================================
     echo "==> Generating cloud-init configuration..."
@@ -909,6 +935,11 @@ EOF
         echo "==> Creating the VM (NAT networking via virbr0)..."
     fi
 
+    VIRT_INSTALL_EXTRA_ARGS=()
+    if [ "$WATCHDOG" -eq 1 ]; then
+        echo "==> Attaching a virtual watchdog device (i6300esb, action=reset)..."
+        VIRT_INSTALL_EXTRA_ARGS+=(--watchdog "model=i6300esb,action=reset")
+    fi
 
     virt-install \
         --name "$VM_NAME" \
@@ -921,6 +952,7 @@ EOF
         --graphics none \
         --import \
         --noautoconsole \
+        ${VIRT_INSTALL_EXTRA_ARGS[@]+"${VIRT_INSTALL_EXTRA_ARGS[@]}"}
 
     echo ""
     echo "=================================================="
@@ -989,6 +1021,14 @@ if [ -f "${WORK_DIR}/.admin-sudo-policy" ]; then
 fi
 
 # ============================================================
+# 10.2 Effective watchdog configuration introspection
+# ============================================================
+EFFECTIVE_WATCHDOG=0
+if virsh dumpxml "$VM_NAME" 2>/dev/null | grep -q '<watchdog'; then
+    EFFECTIVE_WATCHDOG=1
+fi
+
+# ============================================================
 # 10.4 Effective log-forwarding configuration introspection
 # ============================================================
 EFFECTIVE_LOG_FORWARDING=""
@@ -1046,6 +1086,21 @@ if [ "$VM_EXISTS" -eq 1 ]; then
         echo "         Continuing with the VM's actual sudo policy."
     fi
 
+    if [ "$WATCHDOG" -ne "$EFFECTIVE_WATCHDOG" ]; then
+        echo ""
+        if [ "$EFFECTIVE_WATCHDOG" -eq 1 ]; then
+            echo "WARNING: VM '${VM_NAME}' already exists with a watchdog device,"
+            echo "         but this run did not request --watchdog."
+        else
+            echo "WARNING: VM '${VM_NAME}' already exists with no watchdog device,"
+            echo "         but this run requested --watchdog."
+        fi
+        echo "         Watchdog configuration is fixed when the VM is created and cannot be"
+        echo "         changed by rerunning this script. To use a different configuration,"
+        echo "         remove the VM first and run again:"
+        echo "           virsh undefine ${VM_NAME} --remove-all-storage"
+        echo "         Continuing with the VM's actual watchdog configuration."
+    fi
 
     if [ "$MONITOR" -eq 1 ] && [ -z "$BRIDGE_IFACE" ] && [ "$EFFECTIVE_LOG_FORWARDING" != "1" ]; then
         echo ""
