@@ -3,7 +3,6 @@
 ## Purpose
 
 Define what `README.md` must communicate to a first-time reader of this repo: the project's purpose and scope, the host prerequisites for running the setup script, copy-pasteable quick-start commands, and pointers to the detailed sources of truth instead of duplicating them.
-
 ## Requirements
 ### Requirement: Describe project purpose and scope
 `README.md` SHALL state, near the top of the file, what the repo is for: locally provisioning a Debian VM via libvirt/KVM/QEMU that mimics a rented VPS, for self-hosting experiments before deploying to a real VPS.
@@ -20,7 +19,7 @@ Define what `README.md` must communicate to a first-time reader of this repo: th
 - **THEN** the README tells them what the host needs to support before running the script
 
 ### Requirement: Provide quick-start commands
-`README.md` SHALL include copy-pasteable commands to run `debian-vm-setup.sh` with default (NAT) networking and to run `debian-vm-cleanup.sh`, plus one fleet example combining `--name` and `--ip`.
+`README.md` SHALL include copy-pasteable commands to run `debian-vm-setup.sh` with default (NAT) networking and to run `debian-vm-cleanup.sh`, plus one fleet example combining `--name` and `--ip`, plus one minimal example demonstrating that `debian-vm-backup.sh` exists and how to take a snapshot or backup of a VM's disk.
 
 #### Scenario: Reader wants to create a VM
 - **WHEN** a reader wants to provision a VM for the first time
@@ -34,6 +33,10 @@ Define what `README.md` must communicate to a first-time reader of this repo: th
 - **WHEN** a reader wants to provision more than one VM at once
 - **THEN** the README shows an example using `--name` and `--ip` to create a distinctly named, addressable VM
 
+#### Scenario: Reader wants to protect a VM's disk
+- **WHEN** a reader wants to know whether this repo has any answer to "what if I break my VM, or lose its disk?"
+- **THEN** the README shows one minimal example command invoking `debian-vm-backup.sh` (e.g., taking a snapshot or a backup), enough to establish that the script exists and where to look (`--help`) for the rest
+
 ### Requirement: Point to detailed sources of truth instead of duplicating them
 `README.md` SHALL NOT restate the full flag reference for either script or the detailed behavioral guarantees already captured in `openspec/specs/`; it SHALL instead point readers to each script's `--help` output for flags and to `openspec/specs/` for detailed behavior.
 
@@ -44,3 +47,4 @@ Define what `README.md` must communicate to a first-time reader of this repo: th
 #### Scenario: Reader wants to understand a specific behavioral guarantee
 - **WHEN** a reader wants to know the precise rules behind a behavior (e.g. what `--purge-all` refuses to do, or how fleet IP reservation works)
 - **THEN** the README directs them to the relevant capability under `openspec/specs/` rather than re-explaining the guarantee inline
+

@@ -12,7 +12,7 @@ See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and w
 ## Quick start
 
 ```sh
-chmod +x scripts/debian-vm-setup.sh scripts/debian-vm-cleanup.sh
+chmod +x scripts/debian-vm-setup.sh scripts/debian-vm-cleanup.sh scripts/debian-vm-backup.sh
 
 # Create a VM with default NAT networking
 ./scripts/debian-vm-setup.sh
@@ -30,13 +30,22 @@ Give each VM its own `--name`, and optionally reserve a stable `--ip` so other f
 ./scripts/debian-vm-cleanup.sh --name=app-01 --vm-only
 ```
 
+### Protecting a VM's disk (snapshot/backup)
+
+`debian-vm-backup.sh` takes a fast local rollback point (`snapshot`) or a compressed copy of a VM's disk to a separate destination (`backup`):
+
+```sh
+./scripts/debian-vm-backup.sh backup --name=debian-vm
+```
+
 ## More options
 
-Both scripts document their full flag set (`--bridge`, `--forward`, `--purge-all`, sizing flags, and more) in their own `--help`:
+All three scripts document their full flag/subcommand set (`--bridge`, `--forward`, `--purge-all`, sizing flags, snapshot/backup subcommands, and more) in their own `--help`:
 
 ```sh
 ./scripts/debian-vm-setup.sh --help
 ./scripts/debian-vm-cleanup.sh --help
+./scripts/debian-vm-backup.sh --help
 ```
 
 ## Detailed behavior
