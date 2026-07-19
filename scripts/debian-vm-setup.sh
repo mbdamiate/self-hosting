@@ -70,6 +70,8 @@ CLOUD_IMG_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-g
 BRIDGE_IFACE=""
 FORWARD_RULES=""
 STATIC_IP=""
+ADMIN_PASSWORD_REQUESTED=0
+ADMIN_PASSWORD_VALUE=""
 
 print_help() {
     cat <<HELP
@@ -90,7 +92,7 @@ Options:
                       auto-pick the first free address in the network's
                       configured DHCP range. Once reserved, other fleet VMs
                       can resolve this VM by its --name/hostname.
-  --bridge=IFACE     Use bridged networking (macvtap) over the physical
+  --bridge=IFACE      Use bridged networking (macvtap) over the physical
                       interface IFACE (e.g. --bridge=eth0). The VM gets an IP
                       from your router via DHCP. Requires a WIRED interface —
                       not supported over Wi-Fi (hardware/driver limitation).
@@ -98,6 +100,15 @@ Options:
                       of HOST_PORT:VM_PORT pairs (e.g. 2222:22,8080:80).
                       Works fine over Wi-Fi. Applied after the VM gets its
                       NAT IP from libvirt's DHCP.
+  --admin-password[=PASSWORD]
+                      Require a password for sudo (ALL=(ALL) ALL instead of
+                      NOPASSWD:ALL) for the admin user. Without a value, a
+                      random password is generated. SSH stays key-only either
+                      way (ssh_pwauth is never enabled) — the password only
+                      gates local sudo elevation after an SSH session is
+                      already established. Only applies at VM creation;
+                      rerunning against an existing VM cannot change it.
+                      Default: passwordless sudo (NOPASSWD:ALL).
   -h, --help          Show this help.
 
 If neither --bridge nor --forward is given, the VM only gets a NAT IP
@@ -129,6 +140,13 @@ for arg in "$@"; do
             ;;
         --forward=*)
             FORWARD_RULES="${arg#*=}"
+            ;;
+        --admin-password)
+            ADMIN_PASSWORD_REQUESTED=1
+            ;;
+        --admin-password=*)
+            ADMIN_PASSWORD_REQUESTED=1
+            ADMIN_PASSWORD_VALUE="${arg#*=}"
             ;;
         -h|--help)
             print_help
@@ -468,6 +486,38 @@ if [ "$VM_EXISTS" -eq 0 ]; then
     qemu-img resize "$VM_DISK" "${VM_DISK_GB}G"
 
     # ============================================================
+    # 7.1 Admin sudo policy (password-less by default, opt-in password-required)
+    # ============================================================
+    ADMIN_SUDO_ENTRY="ALL=(ALL) NOPASSWD:ALL"
+    ADMIN_PASSWD_BLOCK=""
+    ADMIN_SUDO_POLICY="nopasswd"
+    if [ "$ADMIN_PASSWORD_REQUESTED" -eq 1 ]; then
+        echo "==> Configuring password-required sudo for '${VM_USER}'..."
+        if ! command -v openssl >/dev/null 2>&1; then
+            echo "ERROR: 'openssl' is required to hash the admin password but was not found on the host."
+            echo "       Install it and re-run."
+            exit 1
+        fi
+
+        if [ -n "$ADMIN_PASSWORD_VALUE" ]; then
+            ADMIN_PASSWORD_PLAINTEXT="$ADMIN_PASSWORD_VALUE"
+        else
+            ADMIN_PASSWORD_PLAINTEXT=$(openssl rand -base64 18)
+        fi
+        ADMIN_PASSWORD_HASH=$(openssl passwd -6 -salt "$(openssl rand -hex 8)" "$ADMIN_PASSWORD_PLAINTEXT")
+
+        ADMIN_SUDO_ENTRY="ALL=(ALL) ALL"
+        ADMIN_PASSWD_BLOCK="    passwd: ${ADMIN_PASSWORD_HASH}
+    lock_passwd: false"
+        ADMIN_SUDO_POLICY="password-required"
+
+        echo "${ADMIN_PASSWORD_PLAINTEXT}" > "${WORK_DIR}/admin-password"
+        chmod 600 "${WORK_DIR}/admin-password"
+        echo "    OK: password configured (will be shown once when setup finishes)."
+    fi
+    echo "$ADMIN_SUDO_POLICY" > "${WORK_DIR}/.admin-sudo-policy"
+
+    # ============================================================
     # 8. Creating the cloud-init configuration (user-data / meta-data)
     # ============================================================
     echo "==> Generating cloud-init configuration..."
@@ -480,16 +530,15 @@ users:
   - name: ${VM_USER}
     groups: sudo
     shell: /bin/bash
-    sudo: ALL=(ALL) NOPASSWD:ALL
+    sudo: ${ADMIN_SUDO_ENTRY}
+${ADMIN_PASSWD_BLOCK}
     ssh_authorized_keys:
       - ${SSH_PUB_KEY}
 ssh_pwauth: false
 package_update: true
 package_upgrade: false
 packages:
-  - qemu-guest-agent
 runcmd:
-  - systemctl enable --now qemu-guest-agent
 EOF
 
     cat > meta-data <<EOF
@@ -511,6 +560,7 @@ EOF
         echo "==> Creating the VM (NAT networking via virbr0)..."
     fi
 
+
     virt-install \
         --name "$VM_NAME" \
         --memory "$VM_RAM_MB" \
@@ -521,12 +571,13 @@ EOF
         --network "$NETWORK_ARG" \
         --graphics none \
         --import \
-        --noautoconsole
+        --noautoconsole \
 
     echo ""
     echo "=================================================="
     echo " VM '${VM_NAME}' created successfully!"
     echo "=================================================="
+
 else
     echo ""
     echo "=================================================="
@@ -555,6 +606,14 @@ else
 fi
 
 # ============================================================
+# 10.1 Effective admin sudo policy introspection
+# ============================================================
+EFFECTIVE_ADMIN_SUDO_POLICY=""
+if [ -f "${WORK_DIR}/.admin-sudo-policy" ]; then
+    EFFECTIVE_ADMIN_SUDO_POLICY=$(cat "${WORK_DIR}/.admin-sudo-policy")
+fi
+
+# ============================================================
 # 11. Reusing an existing VM: mode-mismatch warning and auto-start
 # ============================================================
 if [ "$VM_EXISTS" -eq 1 ]; then
@@ -578,6 +637,33 @@ if [ "$VM_EXISTS" -eq 1 ]; then
         echo "         Continuing with the VM's actual (${EFFECTIVE_MODE}) networking."
     fi
 
+    EFFECTIVE_ADMIN_PASSWORD=0
+    [ "$EFFECTIVE_ADMIN_SUDO_POLICY" = "password-required" ] && EFFECTIVE_ADMIN_PASSWORD=1
+    if [ -z "$EFFECTIVE_ADMIN_SUDO_POLICY" ]; then
+        if [ "$ADMIN_PASSWORD_REQUESTED" -eq 1 ]; then
+            echo ""
+            echo "WARNING: VM '${VM_NAME}' already exists, but its sudo policy cannot be determined"
+            echo "         (no record found — it may predate --admin-password)."
+            echo "         Sudo policy is fixed when the VM is created and cannot be changed by rerunning"
+            echo "         this script. To apply --admin-password, remove the VM first and run again:"
+            echo "           virsh undefine ${VM_NAME} --remove-all-storage"
+        fi
+    elif [ "$ADMIN_PASSWORD_REQUESTED" -ne "$EFFECTIVE_ADMIN_PASSWORD" ]; then
+        echo ""
+        if [ "$EFFECTIVE_ADMIN_PASSWORD" -eq 1 ]; then
+            echo "WARNING: VM '${VM_NAME}' already exists with password-required sudo,"
+            echo "         but this run did not request --admin-password."
+        else
+            echo "WARNING: VM '${VM_NAME}' already exists with passwordless sudo (NOPASSWD:ALL),"
+            echo "         but this run requested --admin-password."
+        fi
+        echo "         Sudo policy is fixed when the VM is created and cannot be changed by rerunning"
+        echo "         this script. To use a different policy, remove the VM first and run again:"
+        echo "           virsh undefine ${VM_NAME} --remove-all-storage"
+        echo "         Continuing with the VM's actual sudo policy."
+    fi
+
+
     VM_STATE=$(virsh domstate "$VM_NAME" 2>/dev/null || echo "unknown")
     if [ "$VM_STATE" != "running" ]; then
         echo "==> VM '${VM_NAME}' is currently '${VM_STATE}', starting it..."
@@ -598,6 +684,7 @@ if ! virsh autostart "$VM_NAME" >/dev/null 2>&1; then
     echo "WARNING: failed to enable autostart for VM '${VM_NAME}'. Retry manually with:"
     echo "         virsh autostart ${VM_NAME}"
 fi
+
 
 echo ""
 echo "Waiting for the VM to report a DHCP IP..."
@@ -650,6 +737,8 @@ if [ -n "$FORWARD_RULES" ]; then
                 sudo iptables -I FORWARD -p tcp -d "$VM_IP" --dport "$VM_PORT" -j ACCEPT
             fi
         done
+
+
         echo ""
         echo "NOTE: these iptables rules are NOT persistent across host reboots."
         echo "      To make them permanent, install 'iptables-persistent' (apt) and save with"
@@ -658,6 +747,32 @@ if [ -n "$FORWARD_RULES" ]; then
         echo "      Also note: if the VM's DHCP lease changes, these rules will point to the"
         echo "      wrong IP — check with 'virsh domifaddr ${VM_NAME}' if forwarding stops working."
     fi
+fi
+
+# ============================================================
+# 13.1 Admin sudo policy summary
+# ============================================================
+if [ "$VM_EXISTS" -eq 1 ]; then
+    FINAL_ADMIN_SUDO_POLICY="$EFFECTIVE_ADMIN_SUDO_POLICY"
+else
+    FINAL_ADMIN_SUDO_POLICY="$ADMIN_SUDO_POLICY"
+fi
+
+if [ "$VM_EXISTS" -eq 0 ] && [ "$ADMIN_PASSWORD_REQUESTED" -eq 1 ]; then
+    echo ""
+    echo "=================================================="
+    echo " Admin sudo password (shown once, also saved to"
+    echo " ${WORK_DIR}/admin-password, chmod 600)"
+    echo "=================================================="
+    echo " ${ADMIN_PASSWORD_PLAINTEXT}"
+    echo "=================================================="
+fi
+
+if [ "$FINAL_ADMIN_SUDO_POLICY" = "password-required" ]; then
+    echo ""
+    echo "NOTE: sudo on this VM requires the password above. If it's lost, 'virsh console"
+    echo "      ${VM_NAME}' gives host-root guest access independent of SSH/sudo, which can"
+    echo "      reset it: run 'passwd ${VM_USER}' from the console (Ctrl+] to exit)."
 fi
 
 echo ""
