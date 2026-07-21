@@ -23,7 +23,7 @@ func runDoctor(args []string) error {
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, "Without a flag, reports every host-readiness check as OK or MISSING and")
-		fmt.Fprintln(os.Stdout, "makes no changes. 'vmctl setup' relies on these same checks and fails")
+		fmt.Fprintln(os.Stdout, "makes no changes. 'vmctl create' relies on these same checks and fails")
 		fmt.Fprintln(os.Stdout, "fast on the first one that's missing.")
 	}
 	if err := fs.Parse(args); err != nil {

@@ -19,7 +19,7 @@ var basePackages = []string{
 // Fix installs and configures every host-level prerequisite vmctl depends
 // on: packages, libvirt/kvm group membership, the libvirtd service, the
 // libvirt 'default' NAT network, and the QEMU storage ACL on $HOME. It is
-// the relocated body of what `vmctl setup` used to do unconditionally on
+// the relocated body of what `vmctl create` used to do unconditionally on
 // every invocation.
 func Fix(ctx context.Context, r execrunner.Runner, out io.Writer) error {
 	if err := checkHardwareVirtualization(); err != nil {

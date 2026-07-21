@@ -10,7 +10,7 @@ import (
 	"vmctl/internal/hostready"
 )
 
-// Run performs `vmctl setup`: create a new VM, or safely reuse one that
+// Run performs `vmctl create`: create a new VM, or safely reuse one that
 // already exists, per vm-fleet-provisioning and vm-setup-rerun-recovery.
 func Run(ctx context.Context, r execrunner.Runner, out io.Writer, opts Options) error {
 	if opts.BridgeIface != "" && opts.ForwardRules != "" {

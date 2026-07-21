@@ -18,7 +18,7 @@ var cleanupPackages = []string{
 // Unfix reverts everything Fix establishes: it removes the libvirt
 // 'default' network, purges the packages, removes libvirt/kvm group
 // membership, and revokes the QEMU storage ACL on $HOME. It is the
-// relocated body of what `vmctl cleanup --purge-all` used to do, and
+// relocated body of what `vmctl delete --purge-all` used to do, and
 // refuses to run while any VM is still defined on the host (a stricter
 // guard than `--purge-all`'s "no VM other than mine", since Unfix has no
 // VM of its own).
@@ -47,7 +47,7 @@ func refuseIfAnyVMExists(ctx context.Context, r execrunner.Runner) error {
 		return nil
 	}
 	return fmt.Errorf(`refusing to remove host prerequisites while VMs still exist: %s
-       Remove each one first with: vmctl cleanup --name=<name> --vm-only`, strings.Join(vms, ", "))
+       Remove each one first with: vmctl delete --name=<name> --vm-only`, strings.Join(vms, ", "))
 }
 
 func removeDefaultNetwork(ctx context.Context, r execrunner.Runner, out io.Writer) {

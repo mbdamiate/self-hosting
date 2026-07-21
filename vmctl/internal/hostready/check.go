@@ -12,7 +12,7 @@ import (
 )
 
 // NATNetworkCheckName lets a caller with mode-specific knowledge (like
-// `vmctl setup` in bridged mode, which never touches the 'default' network)
+// `vmctl create` in bridged mode, which never touches the 'default' network)
 // pick this one result out of Check's slice and ignore it.
 const NATNetworkCheckName = "libvirt 'default' network"
 

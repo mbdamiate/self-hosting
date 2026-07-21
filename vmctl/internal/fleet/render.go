@@ -10,7 +10,7 @@ import (
 // fleet prints a message instead of an empty table.
 func RenderList(w io.Writer, infos []VMInfo) {
 	if len(infos) == 0 {
-		fmt.Fprintln(w, "No VMs found. Create one with: vmctl setup")
+		fmt.Fprintln(w, "No VMs found. Create one with: vmctl create")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -21,7 +21,7 @@ func RenderList(w io.Writer, infos []VMInfo) {
 	_ = tw.Flush()
 }
 
-// RenderStatus writes the `vmctl status` single-VM detail view.
+// RenderStatus writes the `vmctl info` single-VM detail view.
 func RenderStatus(w io.Writer, info VMInfo) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tSTATE\tRAM\tVCPUS\tDISK\tMODE\tIP")

@@ -1,4 +1,4 @@
-// Package cleanup implements `vmctl cleanup`, porting debian-vm-cleanup.sh's
+// Package cleanup implements `vmctl delete`, porting debian-vm-cleanup.sh's
 // three modes (interactive, --vm-only, --purge-all) per the vm-cleanup-scope
 // spec. All virsh/systemctl/apt/ufw/sudo calls go through execrunner.Runner.
 package cleanup
@@ -96,7 +96,7 @@ func refusePurgeIfOtherVMsExist(ctx context.Context, r execrunner.Runner, out io
 		fmt.Fprintf(out, "  - %s\n", o)
 	}
 	fmt.Fprintln(out, "       Removing shared host firewall hardening/monitoring infrastructure would break them.")
-	fmt.Fprintf(out, "       Remove each one first with: vmctl cleanup --name=<name> --vm-only\n")
+	fmt.Fprintf(out, "       Remove each one first with: vmctl delete --name=<name> --vm-only\n")
 	return fmt.Errorf("other VMs still exist")
 }
 
@@ -317,7 +317,7 @@ func printFinalNotes(out io.Writer, vmOnly bool) {
 		fmt.Fprintln(out, "  - The downloaded base cloud image, host prerequisites (packages, group")
 		fmt.Fprintln(out, "    membership, the default network, the QEMU storage ACL), any host firewall")
 		fmt.Fprintln(out, "    hardening, the VM's logs, and any backups were left in place.")
-		fmt.Fprintln(out, "  - Rerun 'vmctl setup' to recreate the VM without re-downloading or")
+		fmt.Fprintln(out, "  - Rerun 'vmctl create' to recreate the VM without re-downloading or")
 		fmt.Fprintln(out, "    reinstalling anything.")
 	} else {
 		fmt.Fprintln(out, "Notes:")
@@ -327,7 +327,7 @@ func printFinalNotes(out io.Writer, vmOnly bool) {
 		fmt.Fprintln(out, "    any VM still exists).")
 		fmt.Fprintln(out, "  - Your SSH key in ~/.ssh was NOT deleted (it may be used elsewhere).")
 		fmt.Fprintln(out, "  - Any backups ('vmctl backup') were NOT touched — this command never deletes them.")
-		fmt.Fprintln(out, "  - If you used --forward in 'vmctl setup', the iptables port-forwarding")
+		fmt.Fprintln(out, "  - If you used --forward in 'vmctl create', the iptables port-forwarding")
 		fmt.Fprintln(out, "    rules were NOT removed automatically (this command can't tell which are yours).")
 		fmt.Fprintln(out, "    List them with 'sudo iptables -t nat -L PREROUTING -n --line-numbers' and")
 		fmt.Fprintln(out, "    'sudo iptables -L FORWARD -n --line-numbers', then remove with:")

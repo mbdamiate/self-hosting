@@ -1,4 +1,4 @@
-// Package fleet implements `vmctl list`/`vmctl status`, per vm-fleet-status:
+// Package fleet implements `vmctl list`/`vmctl info`, per vm-fleet-status:
 // a live, aggregated view across every defined VM, querying libvirt fresh on
 // every invocation and persisting nothing.
 package fleet

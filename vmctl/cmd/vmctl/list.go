@@ -38,12 +38,12 @@ func runList(args []string) error {
 	return nil
 }
 
-func runStatus(args []string) error {
-	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+func runInfo(args []string) error {
+	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	name := fs.String("name", "", "VM to show (default: debian-vm)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stdout, "Usage: vmctl status [--name=NAME]")
+		fmt.Fprintln(os.Stdout, "Usage: vmctl info [--name=NAME]")
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, "Shows one VM's live status, querying it fresh (no cached data).")
 	}

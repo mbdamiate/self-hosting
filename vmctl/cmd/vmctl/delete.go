@@ -12,14 +12,14 @@ import (
 	"vmctl/internal/execrunner"
 )
 
-func runCleanup(args []string) error {
-	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+func runDelete(args []string) error {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	name := fs.String("name", "", "VM to target (default: debian-vm). Use a distinct --name per VM when managing a fleet of VMs.")
-	vmOnly := fs.Bool("vm-only", false, "Non-interactive. Removes only the named VM, its attached storage, and its network reservation. Preserves everything else so a rerun of 'vmctl setup' is fast.")
+	vmOnly := fs.Bool("vm-only", false, "Non-interactive. Removes only the named VM, its attached storage, and its network reservation. Preserves everything else so a rerun of 'vmctl create' is fast.")
 	purgeAll := fs.Bool("purge-all", false, "Non-interactive. Removes the VM, the working directory, host firewall hardening, and host-wide monitoring infrastructure. Refuses to run if another VM still exists. Does NOT touch host prerequisites (packages, groups, network, ACL) — use 'vmctl doctor --unfix' for those.")
 	fs.SetOutput(os.Stdout)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stdout, "Usage: vmctl cleanup [--name=NAME] [--vm-only|--purge-all]")
+		fmt.Fprintln(os.Stdout, "Usage: vmctl delete [--name=NAME] [--vm-only|--purge-all]")
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, "Options:")
 		fs.PrintDefaults()

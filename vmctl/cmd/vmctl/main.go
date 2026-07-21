@@ -18,16 +18,24 @@ func main() {
 	args := os.Args[2:]
 	var err error
 	switch os.Args[1] {
-	case "setup":
-		err = runSetup(args)
-	case "cleanup":
-		err = runCleanup(args)
-	case "backup":
-		err = runBackup(args)
+	case "create":
+		err = runCreate(args)
+	case "start":
+		err = runStart(args)
+	case "stop":
+		err = runStop(args)
+	case "reboot":
+		err = runReboot(args)
+	case "delete":
+		err = runDelete(args)
 	case "list":
 		err = runList(args)
-	case "status":
-		err = runStatus(args)
+	case "info":
+		err = runInfo(args)
+	case "snapshot":
+		err = runSnapshot(args)
+	case "backup":
+		err = runBackup(args)
 	case "doctor":
 		err = runDoctor(args)
 	case "-h", "--help", "help":
@@ -49,11 +57,15 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `Usage: vmctl <subcommand> [options]
 
 Subcommands:
-  setup     Create or reuse a Debian VM
-  cleanup   Remove a VM and/or the host-level resources setup installed
-  backup    Snapshot/backup/restore a VM's disk
+  create    Create or reuse a Debian VM
+  start     Start a stopped VM
+  stop      Gracefully shut down a running VM (--force for a hard power-off)
+  reboot    Gracefully reboot a running VM (--force for a hard reset)
+  delete    Remove a VM (and, with --purge-all, opt-in host firewall/monitoring features)
   list      List all defined VMs
-  status    Show a single VM's status
+  info      Show a single VM's status
+  snapshot  Create/restore/delete a local disk-only rollback point
+  backup    Create/list/restore a compressed point-in-time disk copy
   doctor    Check, install (--fix), or remove (--unfix) host prerequisites
 
 Run 'vmctl <subcommand> --help' for subcommand-specific options.

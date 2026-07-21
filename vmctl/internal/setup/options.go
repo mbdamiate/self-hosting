@@ -1,4 +1,4 @@
-// Package setup implements `vmctl setup`, porting debian-vm-setup.sh per the
+// Package setup implements `vmctl create`, porting debian-vm-setup.sh per the
 // vm-fleet-provisioning and vm-setup-rerun-recovery specs. All virsh/
 // virt-install/qemu-img/cloud-localds/apt/systemctl/ufw/iptables calls go
 // through execrunner.Runner.

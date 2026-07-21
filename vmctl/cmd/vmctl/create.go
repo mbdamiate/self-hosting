@@ -39,9 +39,9 @@ func (f *adminPasswordFlag) Set(s string) error {
 
 func (f *adminPasswordFlag) IsBoolFlag() bool { return true }
 
-func setupUsage(fs *flag.FlagSet) func() {
+func createUsage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprintln(os.Stdout, "Usage: vmctl setup [options]")
+		fmt.Fprintln(os.Stdout, "Usage: vmctl create [options]")
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, "Options:")
 		fs.PrintDefaults()
@@ -51,8 +51,8 @@ func setupUsage(fs *flag.FlagSet) func() {
 	}
 }
 
-func runSetup(args []string) error {
-	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+func runCreate(args []string) error {
+	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	name := fs.String("name", "", "Name/hostname for the VM (default: debian-vm)")
 	ram := fs.Int("ram", setup.DefaultRAMMB, "RAM in MB")
@@ -70,7 +70,7 @@ func runSetup(args []string) error {
 	monitor := fs.Bool("monitor", false, "Enable host-side uptime monitoring, local alerting, and log forwarding")
 	watchdog := fs.Bool("watchdog", false, "Attach a virtual watchdog device and enable guest-side petting")
 	noCrashRestart := fs.Bool("no-crash-restart", false, "Disable automatic restart when the QEMU process crashes")
-	fs.Usage = setupUsage(fs)
+	fs.Usage = createUsage(fs)
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {

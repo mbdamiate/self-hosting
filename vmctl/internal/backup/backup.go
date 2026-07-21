@@ -1,7 +1,9 @@
-// Package backup implements `vmctl backup`'s six subcommands
-// (snapshot, snapshot-restore, snapshot-delete, backup, backup-list,
-// backup-restore), porting debian-vm-backup.sh per the vm-disk-snapshot and
-// vm-disk-backup specs.
+// Package backup implements the six operations behind `vmctl snapshot
+// create|restore|delete` and `vmctl backup create|list|restore` (internally
+// still addressed by their original subcommand strings: snapshot,
+// snapshot-restore, snapshot-delete, backup, backup-list, backup-restore),
+// porting debian-vm-backup.sh per the vm-disk-snapshot and vm-disk-backup
+// specs.
 package backup
 
 import (
@@ -138,7 +140,7 @@ func restorePriorState(ctx context.Context, r execrunner.Runner, out io.Writer, 
 
 func cmdSnapshot(ctx context.Context, r execrunner.Runner, out io.Writer, name string) error {
 	if hasSnapshot(ctx, r, name, snapshotName) {
-		return fmt.Errorf("VM '%s' already has an active snapshot ('%s'). Run 'snapshot-restore' or 'snapshot-delete' first", name, snapshotName)
+		return fmt.Errorf("VM '%s' already has an active snapshot ('%s'). Run 'vmctl snapshot restore' or 'vmctl snapshot delete' first", name, snapshotName)
 	}
 
 	fmt.Fprintf(out, "==> Creating an external, disk-only snapshot of '%s'...\n", name)
@@ -146,8 +148,8 @@ func cmdSnapshot(ctx context.Context, r execrunner.Runner, out io.Writer, name s
 		return err
 	}
 	fmt.Fprintf(out, "    OK: snapshot '%s' created. VM keeps running (if it was).\n", snapshotName)
-	fmt.Fprintf(out, "    Restore with: vmctl backup snapshot-restore --name=%s\n", name)
-	fmt.Fprintf(out, "    Discard (keep changes) with: vmctl backup snapshot-delete --name=%s\n", name)
+	fmt.Fprintf(out, "    Restore with: vmctl snapshot restore --name=%s\n", name)
+	fmt.Fprintf(out, "    Discard (keep changes) with: vmctl snapshot delete --name=%s\n", name)
 	return nil
 }
 
@@ -220,7 +222,7 @@ func cmdBackup(ctx context.Context, r execrunner.Runner, out io.Writer, name, de
 	// disk chain. Refuse if a named rollback snapshot is active, matching
 	// `snapshot`'s own "one at a time" rule.
 	if hasSnapshot(ctx, r, name, snapshotName) {
-		return fmt.Errorf("VM '%s' has an active rollback snapshot ('%s'). Running 'backup' now would merge it away. Run 'snapshot-restore' or 'snapshot-delete' first, then back up", name, snapshotName)
+		return fmt.Errorf("VM '%s' has an active rollback snapshot ('%s'). Running 'vmctl backup create' now would merge it away. Run 'vmctl snapshot restore' or 'vmctl snapshot delete' first, then back up", name, snapshotName)
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -348,7 +350,7 @@ func cmdBackupList(out io.Writer, name, destDir string) error {
 
 func cmdBackupRestore(ctx context.Context, r execrunner.Runner, out io.Writer, in io.Reader, name, backupFile string) error {
 	if backupFile == "" {
-		return fmt.Errorf("--file=<path> is required for backup-restore")
+		return fmt.Errorf("--file=<path> is required for 'vmctl backup restore'")
 	}
 	if _, err := os.Stat(backupFile); err != nil {
 		return fmt.Errorf("backup file not found: %s", backupFile)

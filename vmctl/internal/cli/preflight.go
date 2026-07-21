@@ -26,7 +26,7 @@ func RequireVirsh() error {
 
 func requireVirsh(lookPath func(string) (string, error)) error {
 	if _, err := lookPath("virsh"); err != nil {
-		return fmt.Errorf("'virsh' was not found. Run 'vmctl setup' first")
+		return fmt.Errorf("'virsh' was not found. Run 'vmctl create' first")
 	}
 	return nil
 }
