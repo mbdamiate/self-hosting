@@ -9,6 +9,7 @@ Nenhum destes testes foi (ou pôde ser) executado em CI/sandbox — todos exigem
 - Disparo real do watchdog (`echo c > /proc/sysrq-trigger`, seção 6) — não executado.
 - Teste do motd via logout/login na sessão do host (seção 5) — não executado.
 - Seção 7 (`on_crash=restart` via `kill -9`) — executado, mas terminou como achado **não resolvido** (a VM não reiniciou sozinha); ver a nota ⚠️ na seção e `design.md`'s Open Questions. Não tratar como "passou".
+- **Seção 0 (`vmctl doctor`)** — nova, ainda sem nenhuma rodada real executada (bloqueada num ambiente sem `sudo` interativo). Pendente de validação.
 
 ## Pré-requisitos (uma vez)
 
@@ -30,6 +31,100 @@ Confirme suporte a virtualização e que você não está como root:
 egrep -c '(vmx|svm)' /proc/cpuinfo   # deve ser > 0
 whoami                                # não deve ser root
 ```
+
+---
+
+## 0. `vmctl doctor` (pré-requisitos de host)
+
+`vmctl setup` não instala/configura mais nada no host — só verifica. `vmctl doctor` é quem instala (`--fix`) ou remove (`--unfix`). Este roteiro precisa de `sudo` interativo de verdade (não roda em sandbox sem TTY) — execute cada bloco você mesmo num terminal normal e reporte o resultado (saída + código de saída, `echo $?`) de volta.
+
+Cada passo tem um nível de risco. Pare e me reporte depois de cada bloco antes de ir pro próximo, principalmente ao entrar no nível 🔴.
+
+### 0.1 — 🟢 Estado atual (somente leitura)
+
+```sh
+$VMCTL doctor; echo "exit: $?"
+```
+**Esperado:** uma linha `[OK]`/`[MISSING]` por item (pacotes, grupo libvirt/kvm, libvirtd, rede `default`, ACL do `libvirt-qemu`). Se este host já foi usado antes, é normal já estar tudo `[OK]` e `exit: 0` — não muda nada de qualquer forma.
+
+**Reporte:** cole a saída completa + o exit code.
+
+### 0.2 — 🟡 `--fix` idempotente (seguro se o host já está `[OK]`; instala coisas reais se não estiver)
+
+```sh
+$VMCTL doctor --fix; echo "exit: $?"
+$VMCTL doctor; echo "exit: $?"
+```
+**Esperado:** `--fix` roda `apt update`/`install`, `usermod`, `systemctl enable --now libvirtd`, ativa a rede `default` e concede a ACL — cada passo é um no-op se já estiver feito. O `doctor` seguinte deve mostrar tudo `[OK]` e `exit: 0`.
+
+Se `--fix` acabou de adicionar seu usuário aos grupos `libvirt`/`kvm` pela primeira vez: **faça logout/login** antes de continuar (a própria mensagem de erro deve avisar disso caso a sessão atual ainda não tenha o grupo ativo — rode `id -nG` pra conferir).
+
+**Reporte:** cole as duas saídas + exit codes. Se algum passo do `--fix` falhar, cole o erro específico.
+
+### 0.3 — 🟢 `vmctl setup` sem sudo (cria uma VM descartável)
+
+```sh
+$VMCTL setup --name=doctor-test-01; echo "exit: $?"
+```
+**Esperado:** a única menção a pré-requisitos é uma linha tipo `OK: host prerequisites present.` — **nenhuma** chamada de `apt`/`usermod`/`systemctl`/`setfacl` deve aparecer na saída (procure por essas strings). O resto é a criação normal da VM.
+
+Depois, limpe:
+```sh
+$VMCTL cleanup --name=doctor-test-01 --vm-only; echo "exit: $?"
+```
+
+**Reporte:** confirme se apareceu ou não alguma chamada de instalação na saída do `setup` (cole o trecho relevante).
+
+### 0.4 — 🟡 Fail-fast com um pré-requisito faltando (remove e reinstala um pacote não-crítico)
+
+```sh
+sudo apt remove -y genisoimage
+$VMCTL setup --name=doctor-test-02; echo "exit: $?"
+```
+**Esperado:** falha IMEDIATA, antes de qualquer trabalho de criação de VM, citando `genisoimage` especificamente e apontando pra `vmctl doctor --fix`.
+
+Restaure:
+```sh
+sudo apt install -y genisoimage
+$VMCTL doctor; echo "exit: $?"   # deve voltar a tudo [OK]
+```
+
+**Reporte:** cole a mensagem de erro do `setup` e a confirmação de que voltou a `[OK]` depois.
+
+### 0.5 — 🔴 `--unfix` (remove KVM/libvirt/grupos/rede de verdade deste host — opcional)
+
+Só faça isso se estiver de acordo em desinstalar KVM/libvirt temporariamente. Pule pro final se preferir considerar a validação encerrada em 0.4.
+
+```sh
+virsh list --all   # confirme se está vazio; se não estiver, anote quais VMs existem
+```
+
+**Teste da recusa (crie uma VM de propósito pra isso):**
+```sh
+$VMCTL setup --name=doctor-test-03
+$VMCTL doctor --unfix; echo "exit: $?"
+```
+**Esperado:** recusa (exit != 0), citando `doctor-test-03` e apontando pra removê-la primeiro com `vmctl cleanup --vm-only`.
+
+**Teste da remoção de verdade:**
+```sh
+$VMCTL cleanup --name=doctor-test-03 --vm-only
+virsh list --all   # confirme vazio agora
+
+$VMCTL doctor --unfix; echo "exit: $?"
+$VMCTL doctor; echo "exit: $?"
+```
+**Esperado:** `--unfix` roda sem recusar, remove a rede `default`, purga os pacotes, remove os grupos e revoga a ACL. O `doctor` seguinte deve mostrar tudo `[MISSING]`.
+
+**Re-provisionamento (fecha o ciclo):**
+```sh
+$VMCTL doctor --fix; echo "exit: $?"
+$VMCTL doctor; echo "exit: $?"   # deve voltar a tudo [OK]
+```
+
+⚠️ **Achado de teste real (2026-07-21)**: rodando esse ciclo completo contra um host real, `--fix` falhou ao tentar re-provisionar depois do `--unfix`, porque `--unfix` roda `virsh net-undefine default` (remove a definição inteira, não só desativa), enquanto `ensureNATNetworkReady` (dentro do `Fix`) só sabia ativar/autostart uma rede já definida, não redefini-la do zero — o próprio round-trip `--unfix` → `--fix` nunca tinha sido exercitado antes desta rodada. Corrigido: `Fix` agora roda `virsh net-define /usr/share/libvirt/networks/default.xml` quando a rede não existe, antes de tentar ativá-la/autostart. Recompile (`go build -o vmctl ./cmd/vmctl`) antes de repetir este bloco.
+
+**Reporte:** cole as quatro saídas principais (recusa, remoção, `[MISSING]`, `[OK]` final).
 
 ---
 
@@ -442,3 +537,12 @@ done
 # some backups/logs de teste ficam preservados de propósito — apague manualmente se quiser:
 # rm -rf ~/vm-backups/test-* /var/log/self-hosting-vms/test-*
 ```
+
+**Teste de `vmctl doctor --unfix`** (opcional — só se quiser desfazer o `--fix` da seção 0 por completo; deixa o host sem KVM/libvirt):
+```sh
+virsh list --all   # confirme que está vazio antes de continuar
+
+$VMCTL doctor --unfix
+$VMCTL doctor   # tudo deve voltar a aparecer [MISSING]
+```
+**Esperado:** com pelo menos uma VM ainda definida, `--unfix` deve se recusar a rodar (erro listando a(s) VM(s) e apontando pra removê-las primeiro com `vmctl cleanup --vm-only`). Só com `virsh list --all` vazio ele deve prosseguir: remove a rede `default`, purga os pacotes, remove o usuário dos grupos `libvirt`/`kvm`, e revoga a ACL do `libvirt-qemu` em `$HOME`.

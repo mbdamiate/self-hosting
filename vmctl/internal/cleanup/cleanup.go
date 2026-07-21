@@ -71,11 +71,7 @@ func Run(ctx context.Context, r execrunner.Runner, out io.Writer, in io.Reader, 
 		removeHostFirewallHardening(ctx, r, out, tools, confirm)
 		removeMonitoringInfra(ctx, r, out, confirm)
 		askDeleteLogs(ctx, r, out, in)
-		removeDefaultNetwork(ctx, r, out, tools, confirm)
 		removeWorkDir(ctx, out, target, confirm)
-		removePackages(ctx, r, out, confirm)
-		removeGroups(ctx, r, out, confirm)
-		revokeACL(ctx, r, out, confirm)
 	}
 
 	printFinalNotes(out, opts.VMOnly)
@@ -99,7 +95,7 @@ func refusePurgeIfOtherVMsExist(ctx context.Context, r execrunner.Runner, out io
 	for _, o := range others {
 		fmt.Fprintf(out, "  - %s\n", o)
 	}
-	fmt.Fprintln(out, "       Purging shared packages/network/groups would break them.")
+	fmt.Fprintln(out, "       Removing shared host firewall hardening/monitoring infrastructure would break them.")
 	fmt.Fprintf(out, "       Remove each one first with: vmctl cleanup --name=<name> --vm-only\n")
 	return fmt.Errorf("other VMs still exist")
 }
@@ -290,26 +286,6 @@ func askDeleteLogs(ctx context.Context, r execrunner.Runner, out io.Writer, in i
 	fmt.Fprintln(out)
 }
 
-func removeDefaultNetwork(ctx context.Context, r execrunner.Runner, out io.Writer, tools Tools, confirm func(string) bool) {
-	if !tools.Virsh {
-		return
-	}
-	if _, err := r.Run(ctx, "virsh", "net-info", "default"); err != nil {
-		fmt.Fprintln(out, "==> No 'default' libvirt network found, skipping.")
-		fmt.Fprintln(out)
-		return
-	}
-	if !confirm("Also remove libvirt's default virtual network (virbr0/'default')?") {
-		fmt.Fprintln(out, "==> Keeping the default virtual network.")
-		fmt.Fprintln(out)
-		return
-	}
-	_, _ = r.Run(ctx, "virsh", "net-destroy", "default")
-	_, _ = r.Run(ctx, "virsh", "net-undefine", "default")
-	fmt.Fprintln(out, "    'default' network removed.")
-	fmt.Fprintln(out)
-}
-
 func removeWorkDir(ctx context.Context, out io.Writer, target cli.Target, confirm func(string) bool) {
 	if _, err := os.Stat(target.WorkDir); err != nil {
 		fmt.Fprintf(out, "==> Working directory '%s' not found, skipping.\n", target.WorkDir)
@@ -328,68 +304,6 @@ func removeWorkDir(ctx context.Context, out io.Writer, target cli.Target, confir
 	fmt.Fprintln(out)
 }
 
-var cleanupPackages = []string{
-	"qemu-system-x86", "qemu-utils", "libvirt-daemon-system", "libvirt-clients",
-	"bridge-utils", "virtinst", "cloud-image-utils", "genisoimage",
-}
-
-func removePackages(ctx context.Context, r execrunner.Runner, out io.Writer, confirm func(string) bool) {
-	fmt.Fprintln(out, "Packages that will be removed (purge):")
-	fmt.Fprintf(out, "  %s\n", strings.Join(cleanupPackages, " "))
-	fmt.Fprintln(out, "WARNING: if you use KVM/libvirt for other VMs besides this one, do NOT remove the packages.")
-	if !confirm("Remove these packages from the system?") {
-		fmt.Fprintln(out, "==> Skipping package removal.")
-		fmt.Fprintln(out)
-		return
-	}
-	fmt.Fprintln(out, "==> Stopping the libvirtd service...")
-	_, _ = r.Run(ctx, "sudo", "systemctl", "stop", "libvirtd")
-	_, _ = r.Run(ctx, "sudo", "systemctl", "disable", "libvirtd")
-
-	fmt.Fprintln(out, "==> Removing packages...")
-	purgeArgs := append([]string{"apt", "purge", "-y"}, cleanupPackages...)
-	_, _ = r.Run(ctx, "sudo", purgeArgs...)
-	_, _ = r.Run(ctx, "sudo", "apt", "autoremove", "-y")
-	fmt.Fprintln(out, "    Packages removed.")
-	fmt.Fprintln(out)
-}
-
-func removeGroups(ctx context.Context, r execrunner.Runner, out io.Writer, confirm func(string) bool) {
-	user := currentUser()
-	if !confirm(fmt.Sprintf("Remove your user (%s) from the 'libvirt' and 'kvm' groups?", user)) {
-		fmt.Fprintln(out, "==> Skipping group removal.")
-		fmt.Fprintln(out)
-		return
-	}
-	_, _ = r.Run(ctx, "sudo", "gpasswd", "-d", user, "libvirt")
-	_, _ = r.Run(ctx, "sudo", "gpasswd", "-d", user, "kvm")
-	fmt.Fprintln(out, "    Done (full effect only after logout/login).")
-	fmt.Fprintln(out)
-}
-
-func revokeACL(ctx context.Context, r execrunner.Runner, out io.Writer, confirm func(string) bool) {
-	if !confirm(`Revoke the 'libvirt-qemu' traversal ACL on $HOME? (skip if other local VMs might still need it)`) {
-		fmt.Fprintln(out, "==> Keeping the 'libvirt-qemu' ACL entry on $HOME.")
-		fmt.Fprintln(out)
-		return
-	}
-	home, _ := os.UserHomeDir()
-	if _, err := r.Run(ctx, "sudo", "setfacl", "-x", "u:libvirt-qemu", home); err != nil {
-		fmt.Fprintln(out, "WARNING: could not revoke the 'libvirt-qemu' ACL entry on $HOME (it may not exist, or the filesystem may not support ACLs).")
-		fmt.Fprintln(out)
-		return
-	}
-	fmt.Fprintln(out, "    ACL entry removed.")
-	fmt.Fprintln(out)
-}
-
-func currentUser() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	return "unknown"
-}
-
 func printFinalNotes(out io.Writer, vmOnly bool) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "==================================================")
@@ -400,16 +314,18 @@ func printFinalNotes(out io.Writer, vmOnly bool) {
 		fmt.Fprintln(out, "Notes:")
 		fmt.Fprintln(out, "  - Only the VM and its attached storage were removed (its monitoring timer,")
 		fmt.Fprintln(out, "    if any, was disabled too).")
-		fmt.Fprintln(out, "  - The downloaded base cloud image, installed packages, group membership,")
-		fmt.Fprintln(out, `    the default network, the QEMU storage ACL on $HOME, any host firewall`)
+		fmt.Fprintln(out, "  - The downloaded base cloud image, host prerequisites (packages, group")
+		fmt.Fprintln(out, "    membership, the default network, the QEMU storage ACL), any host firewall")
 		fmt.Fprintln(out, "    hardening, the VM's logs, and any backups were left in place.")
 		fmt.Fprintln(out, "  - Rerun 'vmctl setup' to recreate the VM without re-downloading or")
 		fmt.Fprintln(out, "    reinstalling anything.")
 	} else {
 		fmt.Fprintln(out, "Notes:")
-		fmt.Fprintln(out, "  - If you removed the groups, log out/in for the change to fully apply.")
+		fmt.Fprintln(out, "  - Host prerequisites (packages, group membership, the default network, the")
+		fmt.Fprintln(out, "    QEMU storage ACL) were NOT touched by this command — they're managed by")
+		fmt.Fprintln(out, "    'vmctl doctor'. To remove them too: 'vmctl doctor --unfix' (refuses while")
+		fmt.Fprintln(out, "    any VM still exists).")
 		fmt.Fprintln(out, "  - Your SSH key in ~/.ssh was NOT deleted (it may be used elsewhere).")
-		fmt.Fprintln(out, "  - If you skipped package removal, KVM/libvirt remain installed on the system.")
 		fmt.Fprintln(out, "  - Any backups ('vmctl backup') were NOT touched — this command never deletes them.")
 		fmt.Fprintln(out, "  - If you used --forward in 'vmctl setup', the iptables port-forwarding")
 		fmt.Fprintln(out, "    rules were NOT removed automatically (this command can't tell which are yours).")

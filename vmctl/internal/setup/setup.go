@@ -7,6 +7,7 @@ import (
 
 	"vmctl/internal/cli"
 	"vmctl/internal/execrunner"
+	"vmctl/internal/hostready"
 )
 
 // Run performs `vmctl setup`: create a new VM, or safely reuse one that
@@ -32,40 +33,22 @@ func Run(ctx context.Context, r execrunner.Runner, out io.Writer, opts Options) 
 		fmt.Fprintln(out, "==> No --bridge or --forward given, using plain NAT (virbr0).")
 	}
 
-	fmt.Fprintln(out, "==> Checking for hardware virtualization support...")
-	if err := checkHardwareVirtualization(); err != nil {
-		return err
-	}
-	fmt.Fprintln(out, "    OK: hardware virtualization supported.")
-
 	if err := cli.RequireNonRoot(); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(out, "==> Checking if the system is Debian/Ubuntu-based (apt)...")
-	if err := checkApt(); err != nil {
-		return err
+	fmt.Fprintln(out, "==> Checking host prerequisites (packages, groups, network, ACL)...")
+	for _, result := range hostready.Check(ctx, r) {
+		if opts.BridgeIface != "" && result.Name == hostready.NATNetworkCheckName {
+			continue // bridged mode never touches the 'default' NAT network
+		}
+		if !result.OK {
+			return fmt.Errorf("%s: %s\n       Run 'vmctl doctor' for a full report, or 'vmctl doctor --fix' to install/configure missing prerequisites.", result.Name, result.Detail)
+		}
 	}
-	fmt.Fprintln(out, "    OK.")
-
-	if err := installPrerequisites(ctx, r, out); err != nil {
-		return err
-	}
+	fmt.Fprintln(out, "    OK: host prerequisites present.")
 
 	target := cli.ResolveTarget(opts.Name)
-
-	if opts.BridgeIface == "" {
-		fmt.Fprintln(out, "==> Checking the libvirt 'default' network (required for NAT networking)...")
-		if err := ensureNATNetworkReady(ctx, r, out); err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintln(out, "==> Bridged mode selected: leaving the 'default' network untouched.")
-	}
-
-	if err := grantQEMUStorageACL(ctx, r, out); err != nil {
-		return err
-	}
 
 	if opts.HardenHostFirewall {
 		if err := hardenHostFirewall(ctx, r, out); err != nil {

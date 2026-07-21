@@ -5,7 +5,7 @@ Provisions a local Debian VM via libvirt/KVM/QEMU + cloud-init, mimicking a rent
 ## Prerequisites
 
 - An apt-based Linux host (Ubuntu/Debian) with KVM support.
-- `sudo` access — `vmctl setup` installs packages and manages libvirt/KVM group membership on your behalf.
+- Host-level prerequisites (packages, libvirt/kvm group membership, the libvirtd service, the libvirt `default` network, the QEMU storage ACL) present before running `vmctl setup` — see `DEPENDENCIES.md` for the full list. `vmctl setup` only checks these; it does not install or configure them.
 - A Go toolchain (build-time only) to build `vmctl` itself.
 
 See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and why `qemu-kvm` is deliberately not one of them on Ubuntu.
@@ -14,6 +14,11 @@ See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and w
 
 ```sh
 cd vmctl && go build -o vmctl ./cmd/vmctl && cd ..
+
+# Check host readiness, and install/configure anything missing (packages,
+# group membership, libvirtd, the default network, the QEMU storage ACL)
+./vmctl/vmctl doctor
+./vmctl/vmctl doctor --fix   # if 'doctor' reported anything missing
 
 # Create a VM with default NAT networking
 ./vmctl/vmctl setup
@@ -54,8 +59,9 @@ List every VM currently defined, or check one in detail — both query libvirt l
 ./vmctl/vmctl setup --help
 ./vmctl/vmctl cleanup --help
 ./vmctl/vmctl backup --help
+./vmctl/vmctl doctor --help
 ```
 
 ## Detailed behavior
 
-The guarantees behind setup, cleanup, and fleet behavior — rerun safety, cleanup scope, port-forward idempotency, IP reservation, and more — are specified as OpenSpec capabilities under `openspec/specs/`.
+The guarantees behind setup, cleanup, fleet behavior, and host-prerequisite checking — rerun safety, cleanup scope, port-forward idempotency, IP reservation, and more — are specified as OpenSpec capabilities under `openspec/specs/`.

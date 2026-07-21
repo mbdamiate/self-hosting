@@ -28,6 +28,8 @@ func main() {
 		err = runList(args)
 	case "status":
 		err = runStatus(args)
+	case "doctor":
+		err = runDoctor(args)
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return
@@ -52,6 +54,7 @@ Subcommands:
   backup    Snapshot/backup/restore a VM's disk
   list      List all defined VMs
   status    Show a single VM's status
+  doctor    Check, install (--fix), or remove (--unfix) host prerequisites
 
 Run 'vmctl <subcommand> --help' for subcommand-specific options.
 `)

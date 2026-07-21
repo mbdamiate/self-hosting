@@ -1,34 +1,14 @@
-package setup
+package hostready
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"os/user"
 	"strings"
 
 	"vmctl/internal/execrunner"
 )
-
-func checkHardwareVirtualization() error {
-	data, err := os.ReadFile("/proc/cpuinfo")
-	if err != nil {
-		return fmt.Errorf("could not read /proc/cpuinfo")
-	}
-	if !strings.Contains(string(data), "vmx") && !strings.Contains(string(data), "svm") {
-		return fmt.Errorf("your CPU doesn't report VT-x/AMD-V support, or it's disabled in the BIOS. Enable virtualization in the BIOS/UEFI and run this again")
-	}
-	return nil
-}
-
-func checkApt() error {
-	if _, err := exec.LookPath("apt"); err != nil {
-		return fmt.Errorf("this assumes a system with apt (Ubuntu/Debian). Adapt it for your distro")
-	}
-	return nil
-}
 
 var basePackages = []string{
 	"qemu-system-x86", "qemu-utils", "libvirt-daemon-system", "libvirt-clients",
@@ -36,18 +16,32 @@ var basePackages = []string{
 	"wget", "openssh-client", "acl",
 }
 
-func currentUsername() string {
-	if u, err := user.Current(); err == nil {
-		return u.Username
+// Fix installs and configures every host-level prerequisite vmctl depends
+// on: packages, libvirt/kvm group membership, the libvirtd service, the
+// libvirt 'default' NAT network, and the QEMU storage ACL on $HOME. It is
+// the relocated body of what `vmctl setup` used to do unconditionally on
+// every invocation.
+func Fix(ctx context.Context, r execrunner.Runner, out io.Writer) error {
+	if err := checkHardwareVirtualization(); err != nil {
+		return err
 	}
-	return os.Getenv("USER")
+	if err := checkApt(); err != nil {
+		return err
+	}
+
+	if err := installPackagesAndGroups(ctx, r, out); err != nil {
+		return err
+	}
+	if err := ensureNATNetworkReady(ctx, r, out); err != nil {
+		return err
+	}
+	if err := grantQEMUStorageACL(ctx, r, out); err != nil {
+		return err
+	}
+	return nil
 }
 
-// installPrerequisites mirrors sections 2 and its group-membership check:
-// installs packages, adds the user to libvirt/kvm, starts libvirtd, and
-// verifies the CURRENT session actually has those groups (a fresh usermod
-// only takes effect in a new login session).
-func installPrerequisites(ctx context.Context, r execrunner.Runner, out io.Writer) error {
+func installPackagesAndGroups(ctx context.Context, r execrunner.Runner, out io.Writer) error {
 	fmt.Fprintln(out, "==> Installing KVM, QEMU, libvirt, and cloud-init tools...")
 	if _, err := r.Run(ctx, "sudo", "apt", "update"); err != nil {
 		return err
@@ -89,18 +83,19 @@ func installPrerequisites(ctx context.Context, r execrunner.Runner, out io.Write
 	if len(missing) > 0 {
 		return fmt.Errorf(`the current session is missing required groups: %s
        Your user was added to these groups, but the change only takes effect
-       after a new login session. Log out and back in, then run this again.
+       after a new login session. Log out and back in, then run 'vmctl doctor --fix' again.
        Verify with: id -nG`, strings.Join(missing, ", "))
 	}
 	return nil
 }
 
-// ensureNATNetworkReady mirrors section 3: skipped entirely in bridged mode.
 func ensureNATNetworkReady(ctx context.Context, r execrunner.Runner, out io.Writer) error {
 	if _, err := r.Run(ctx, "virsh", "net-info", "default"); err != nil {
-		return fmt.Errorf(`the libvirt network 'default' is not defined.
-       Inspect available networks with: virsh net-list --all
-       Define/restore it, e.g.: virsh net-define /usr/share/libvirt/networks/default.xml`)
+		fmt.Fprintln(out, "==> The 'default' network is not defined, defining it from the packaged template...")
+		if _, defErr := r.Run(ctx, "virsh", "net-define", "/usr/share/libvirt/networks/default.xml"); defErr != nil {
+			return fmt.Errorf(`failed to define the libvirt network 'default' from /usr/share/libvirt/networks/default.xml.
+       Inspect available networks with: virsh net-list --all`)
+		}
 	}
 
 	info, _ := r.Run(ctx, "virsh", "net-info", "default")
@@ -126,7 +121,6 @@ func ensureNATNetworkReady(ctx context.Context, r execrunner.Runner, out io.Writ
 	return nil
 }
 
-// grantQEMUStorageACL mirrors section 4.
 func grantQEMUStorageACL(ctx context.Context, r execrunner.Runner, out io.Writer) error {
 	fmt.Fprintln(out, "==> Granting the 'libvirt-qemu' service account traversal access to $HOME...")
 	if _, err := r.Run(ctx, "id", "-u", "libvirt-qemu"); err != nil {
