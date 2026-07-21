@@ -38,6 +38,8 @@ func main() {
 		err = runBackup(args)
 	case "doctor":
 		err = runDoctor(args)
+	case "version", "--version":
+		err = runVersion(args)
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return
@@ -67,6 +69,7 @@ Subcommands:
   snapshot  Create/restore/delete a local disk-only rollback point
   backup    Create/list/restore a compressed point-in-time disk copy
   doctor    Check, install (--fix), or remove (--unfix) host prerequisites
+  version   Print the version vmctl was built with
 
 Run 'vmctl <subcommand> --help' for subcommand-specific options.
 `)

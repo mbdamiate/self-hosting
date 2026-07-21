@@ -10,30 +10,43 @@ Provisions a local Debian VM via libvirt/KVM/QEMU + cloud-init, mimicking a rent
 
 See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and why `qemu-kvm` is deliberately not one of them on Ubuntu.
 
-## Quick start
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mbdamiate/self-hosting/main/install.sh | sh
+```
+
+Downloads the latest release binary (`linux/amd64`/`linux/arm64`) from [GitHub Releases](https://github.com/mbdamiate/self-hosting/releases), verifies its checksum, and installs it to `/usr/local/bin/vmctl`. Safe to re-run to upgrade.
+
+Building from source instead (e.g. to contribute, or to track `main`):
 
 ```sh
 cd vmctl && go build -o vmctl ./cmd/vmctl && cd ..
+# use ./vmctl/vmctl in place of vmctl in the commands below
+```
 
+## Quick start
+
+```sh
 # Check host readiness, and install/configure anything missing (packages,
 # group membership, libvirtd, the default network, the QEMU storage ACL)
-./vmctl/vmctl doctor
-./vmctl/vmctl doctor --fix   # if 'doctor' reported anything missing
+vmctl doctor
+vmctl doctor --fix   # if 'doctor' reported anything missing
 
 # Create a VM with default NAT networking
-./vmctl/vmctl create
+vmctl create
 
 # Tear it down
-./vmctl/vmctl delete
+vmctl delete
 ```
 
 ### Power state
 
 ```sh
-./vmctl/vmctl stop           # graceful ACPI shutdown
-./vmctl/vmctl start          # power on
-./vmctl/vmctl reboot         # graceful ACPI reboot
-./vmctl/vmctl stop --force   # hard power-off (virsh destroy) if it won't shut down gracefully
+vmctl stop           # graceful ACPI shutdown
+vmctl start          # power on
+vmctl reboot         # graceful ACPI reboot
+vmctl stop --force   # hard power-off (virsh destroy) if it won't shut down gracefully
 ```
 
 ### Running more than one VM (fleet)
@@ -41,15 +54,15 @@ cd vmctl && go build -o vmctl ./cmd/vmctl && cd ..
 Give each VM its own `--name`, and optionally reserve a stable `--ip` so other fleet VMs can reach it by hostname:
 
 ```sh
-./vmctl/vmctl create --name=app-01 --ip=192.168.122.50
-./vmctl/vmctl delete --name=app-01 --vm-only
+vmctl create --name=app-01 --ip=192.168.122.50
+vmctl delete --name=app-01 --vm-only
 ```
 
 List every VM currently defined, or check one in detail — both query libvirt live, nothing is cached:
 
 ```sh
-./vmctl/vmctl list
-./vmctl/vmctl info --name=app-01
+vmctl list
+vmctl info --name=app-01
 ```
 
 ### Protecting a VM's disk (snapshot/backup)
@@ -57,8 +70,8 @@ List every VM currently defined, or check one in detail — both query libvirt l
 `vmctl snapshot` takes a fast local rollback point; `vmctl backup` writes a compressed copy of a VM's disk to a separate destination:
 
 ```sh
-./vmctl/vmctl snapshot create --name=debian-vm
-./vmctl/vmctl backup create --name=debian-vm
+vmctl snapshot create --name=debian-vm
+vmctl backup create --name=debian-vm
 ```
 
 ## More options
@@ -66,14 +79,14 @@ List every VM currently defined, or check one in detail — both query libvirt l
 `vmctl` documents its full flag/subcommand set (`--bridge`, `--forward`, `--purge-all`, snapshot/backup verbs, and more) in its own `--help`:
 
 ```sh
-./vmctl/vmctl create --help
-./vmctl/vmctl delete --help
-./vmctl/vmctl start --help
-./vmctl/vmctl stop --help
-./vmctl/vmctl reboot --help
-./vmctl/vmctl snapshot --help
-./vmctl/vmctl backup --help
-./vmctl/vmctl doctor --help
+vmctl create --help
+vmctl delete --help
+vmctl start --help
+vmctl stop --help
+vmctl reboot --help
+vmctl snapshot --help
+vmctl backup --help
+vmctl doctor --help
 ```
 
 ## Detailed behavior

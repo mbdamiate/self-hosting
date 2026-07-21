@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: vmctl/go.mod
+
+      - name: Build binaries
+        working-directory: vmctl
+        run: |
+          mkdir -p ../dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build \
+              -ldflags "-X main.version=${{ github.ref_name }}" \
+              -o ../dist/vmctl ./cmd/vmctl
+            tar -C ../dist -czf "../dist/vmctl_linux_${arch}.tar.gz" vmctl
+            rm ../dist/vmctl
+          done
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum vmctl_linux_amd64.tar.gz vmctl_linux_arm64.tar.gz > sha256sums.txt
+
+      - name: Publish release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            vmctl_linux_amd64.tar.gz vmctl_linux_arm64.tar.gz sha256sums.txt \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
