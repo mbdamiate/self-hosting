@@ -5,7 +5,7 @@ Provisions a local Debian VM via libvirt/KVM/QEMU + cloud-init, mimicking a rent
 ## Prerequisites
 
 - An apt-based Linux host (Ubuntu/Debian) with KVM support.
-- Host-level prerequisites (packages, libvirt/kvm group membership, the libvirtd service, the libvirt `default` network, the QEMU storage ACL) present before running `vmctl create` — see `DEPENDENCIES.md` for the full list. `vmctl create` only checks these; it does not install or configure them.
+- Host-level prerequisites (packages, libvirt/kvm group membership, the libvirtd service, the libvirt `default` network, the QEMU storage ACL) present before running `vmctl create`. `vmctl create` only checks these; it does not install or configure them — run `vmctl doctor` to check, or `vmctl doctor --fix` to install/configure what's missing.
 - A Go toolchain (build-time only) to build `vmctl` itself.
 
 See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and why `qemu-kvm` is deliberately not one of them on Ubuntu.
