@@ -3,20 +3,31 @@
 Define the QEMU package prerequisites for running and cleaning up the local Debian VM setup on apt-based Ubuntu hosts.
 ## Requirements
 ### Requirement: Install concrete QEMU prerequisites
-The Debian VM setup script SHALL install `qemu-system-x86` and `qemu-utils` through APT and SHALL NOT request `qemu-kvm` as an install target.
+`vmctl doctor --fix` SHALL install `qemu-system-x86` and `qemu-utils` through APT and SHALL NOT request `qemu-kvm` as an install target.
 
 #### Scenario: Ubuntu exposes qemu-kvm only as a virtual package
-- **WHEN** the setup script runs on an Ubuntu host where `qemu-kvm` has no installation candidate
+- **WHEN** `vmctl doctor --fix` runs on an Ubuntu host where `qemu-kvm` has no installation candidate
 - **THEN** APT receives the concrete `qemu-system-x86` package and can continue package installation
 
 #### Scenario: Setup resizes the virtual disk
-- **WHEN** setup reaches the disk-resize step
-- **THEN** `qemu-img` is available from the explicitly declared `qemu-utils` dependency
+- **WHEN** VM creation (`vmctl setup`) reaches the disk-resize step
+- **THEN** `qemu-img` is available from the explicitly declared `qemu-utils` dependency, previously verified present by `vmctl setup`'s preflight
 
 ### Requirement: Clean up declared QEMU prerequisites
-The cleanup script SHALL include `qemu-system-x86` and `qemu-utils` in its purge list when the user confirms package removal.
+`vmctl doctor --unfix` SHALL include `qemu-system-x86` and `qemu-utils` in its purge list when it removes host prerequisites.
 
 #### Scenario: User confirms dependency cleanup
-- **WHEN** the cleanup script is run and the user confirms package removal
-- **THEN** it requests purge of the concrete QEMU system emulator and image utility packages installed by setup
+- **WHEN** `vmctl doctor --unfix` runs and removes host-level prerequisites
+- **THEN** it requests purge of the concrete QEMU system emulator and image utility packages installed by `vmctl doctor --fix`
 
+### Requirement: Verify QEMU prerequisites before VM creation
+`vmctl setup` SHALL verify that `qemu-system-x86` and `qemu-utils` (via the `qemu-img` binary) are present before performing any VM-creation work, and SHALL NOT install them.
+
+#### Scenario: Prerequisite present
+- **WHEN** `vmctl setup` runs and `qemu-img` is found on `PATH`
+- **THEN** setup continues without attempting to install anything
+
+#### Scenario: Prerequisite missing
+- **WHEN** `vmctl setup` runs and `qemu-img` is not found on `PATH`
+- **THEN** setup exits before any VM-creation work, naming the missing package and pointing to `vmctl doctor --fix`
+</content>
