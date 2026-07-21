@@ -36,6 +36,6 @@
 - [x] 6.2 Locally build with `-ldflags "-X main.version=v0.0.0-test"` and confirm `vmctl version`/`vmctl --version` print it
 - [x] 6.3 Confirm a plain `go build` (no ldflags) makes `vmctl version` print `dev`
 - [x] 6.4 Locally cross-compile `GOOS=linux GOARCH=arm64` and confirm the build succeeds (already verified manually during exploration; re-confirm once `-ldflags` is wired in)
-- [ ] 6.5 Once the repo is public: push a `v0.1.0`-style tag and confirm the GitHub Release is created with both archives + `sha256sums.txt`, each binary reporting the tag via `vmctl version`
-- [ ] 6.6 Run `install.sh` end-to-end on a real Linux host (fresh install, confirm `/usr/local/bin/vmctl` works) and again (confirm re-run upgrades in place without error)
+- [x] 6.5 Once the repo is public: push a `v0.1.0`-style tag and confirm the GitHub Release is created with both archives + `sha256sums.txt`, each binary reporting the tag via `vmctl version`
+- [x] 6.6 Run `install.sh` end-to-end on a real Linux host (fresh install, confirm `/usr/local/bin/vmctl` works) and again (confirm re-run upgrades in place without error)
 - [x] 6.7 Deliberately corrupt/mismatch a local copy of `sha256sums.txt` (or simulate) to confirm `install.sh` aborts before installing on a checksum mismatch
