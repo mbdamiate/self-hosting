@@ -5,20 +5,21 @@ Provisions a local Debian VM via libvirt/KVM/QEMU + cloud-init, mimicking a rent
 ## Prerequisites
 
 - An apt-based Linux host (Ubuntu/Debian) with KVM support.
-- `sudo` access — the setup script installs packages and manages libvirt/KVM group membership on your behalf.
+- `sudo` access — `vmctl setup` installs packages and manages libvirt/KVM group membership on your behalf.
+- A Go toolchain (build-time only) to build `vmctl` itself.
 
 See `openspec/specs/ubuntu-qemu-prerequisites/` for the exact package list and why `qemu-kvm` is deliberately not one of them on Ubuntu.
 
 ## Quick start
 
 ```sh
-chmod +x scripts/debian-vm-setup.sh scripts/debian-vm-cleanup.sh scripts/debian-vm-backup.sh
+cd vmctl && go build -o vmctl ./cmd/vmctl && cd ..
 
 # Create a VM with default NAT networking
-./scripts/debian-vm-setup.sh
+./vmctl/vmctl setup
 
 # Tear it down
-./scripts/debian-vm-cleanup.sh
+./vmctl/vmctl cleanup
 ```
 
 ### Running more than one VM (fleet)
@@ -26,26 +27,33 @@ chmod +x scripts/debian-vm-setup.sh scripts/debian-vm-cleanup.sh scripts/debian-
 Give each VM its own `--name`, and optionally reserve a stable `--ip` so other fleet VMs can reach it by hostname:
 
 ```sh
-./scripts/debian-vm-setup.sh --name=app-01 --ip=192.168.122.50
-./scripts/debian-vm-cleanup.sh --name=app-01 --vm-only
+./vmctl/vmctl setup --name=app-01 --ip=192.168.122.50
+./vmctl/vmctl cleanup --name=app-01 --vm-only
+```
+
+List every VM currently defined, or check one in detail — both query libvirt live, nothing is cached:
+
+```sh
+./vmctl/vmctl list
+./vmctl/vmctl status --name=app-01
 ```
 
 ### Protecting a VM's disk (snapshot/backup)
 
-`debian-vm-backup.sh` takes a fast local rollback point (`snapshot`) or a compressed copy of a VM's disk to a separate destination (`backup`):
+`vmctl backup` takes a fast local rollback point (`snapshot`) or a compressed copy of a VM's disk to a separate destination (`backup`):
 
 ```sh
-./scripts/debian-vm-backup.sh backup --name=debian-vm
+./vmctl/vmctl backup backup --name=debian-vm
 ```
 
 ## More options
 
-All three scripts document their full flag/subcommand set (`--bridge`, `--forward`, `--purge-all`, sizing flags, snapshot/backup subcommands, and more) in their own `--help`:
+`vmctl` documents its full flag/subcommand set (`--bridge`, `--forward`, `--purge-all`, sizing flags, snapshot/backup subcommands, and more) in its own `--help`:
 
 ```sh
-./scripts/debian-vm-setup.sh --help
-./scripts/debian-vm-cleanup.sh --help
-./scripts/debian-vm-backup.sh --help
+./vmctl/vmctl setup --help
+./vmctl/vmctl cleanup --help
+./vmctl/vmctl backup --help
 ```
 
 ## Detailed behavior
