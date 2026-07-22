@@ -18,6 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/mbdamiate/self-hosting/main/install
 
 Downloads the latest release binary (`linux/amd64`/`linux/arm64`) from [GitHub Releases](https://github.com/mbdamiate/self-hosting/releases), verifies its checksum, and installs it to `/usr/local/bin/vmctl`. Safe to re-run to upgrade.
 
+Latest release: [v0.1.0](https://github.com/mbdamiate/self-hosting/releases/tag/v0.1.0).
+
 Building from source instead (e.g. to contribute, or to track `main`):
 
 ```sh
