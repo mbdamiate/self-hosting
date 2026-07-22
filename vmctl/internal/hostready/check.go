@@ -29,7 +29,10 @@ func checkHardwareVirtualization() error {
 
 func checkApt() error {
 	if _, err := exec.LookPath("apt"); err != nil {
-		return fmt.Errorf("this assumes a system with apt (Ubuntu/Debian). Adapt it for your distro")
+		return fmt.Errorf(`'vmctl doctor --fix'/'--unfix' only install/configure prerequisites via apt (Ubuntu/Debian); 'apt' was not found on this host.
+       Run 'vmctl doctor' (no flag) to see exactly what's missing, then install the
+       equivalents for your distro's package manager and complete the remaining
+       steps manually.`)
 	}
 	return nil
 }
@@ -56,12 +59,14 @@ var binaryChecks = []binaryCheck{
 	{"wget", "wget"},
 	{"openssh-client (ssh-keygen)", "ssh-keygen"},
 	{"acl (setfacl)", "setfacl"},
+	// These three are packages vmctl installs but never invokes a binary
+	// from directly (libvirtd/virt-install/cloud-localds use them
+	// transitively). Checking their binary rather than the Debian package
+	// name (formerly via dpkg -s) keeps the check meaningful on any distro.
+	{"qemu-system-x86", "qemu-system-x86_64"},
+	{"bridge-utils", "brctl"},
+	{"genisoimage", "genisoimage"},
 }
-
-// dpkgChecks are packages vmctl installs but never invokes a binary from
-// directly (libvirtd/virt-install/cloud-localds use them transitively) — so
-// presence is verified via dpkg instead of exec.LookPath.
-var dpkgChecks = []string{"qemu-system-x86", "bridge-utils", "genisoimage"}
 
 // Check runs every host-level readiness check and returns one CheckResult
 // per requirement, in a stable order. It never modifies the system.
@@ -69,7 +74,6 @@ func Check(ctx context.Context, r execrunner.Runner) []CheckResult {
 	var results []CheckResult
 
 	results = append(results, boolResult("hardware virtualization (VT-x/AMD-V)", checkHardwareVirtualization()))
-	results = append(results, boolResult("apt-based host", checkApt()))
 
 	for _, bc := range binaryChecks {
 		_, err := exec.LookPath(bc.binary)
@@ -78,16 +82,6 @@ func Check(ctx context.Context, r execrunner.Runner) []CheckResult {
 			OK:   err == nil,
 			Detail: notEmptyIf(err != nil, fmt.Sprintf(
 				"'%s' not found on PATH. Run 'vmctl doctor --fix' to install it.", bc.binary)),
-		})
-	}
-
-	for _, pkg := range dpkgChecks {
-		_, err := r.Run(ctx, "dpkg", "-s", pkg)
-		results = append(results, CheckResult{
-			Name: pkg,
-			OK:   err == nil,
-			Detail: notEmptyIf(err != nil, fmt.Sprintf(
-				"package '%s' is not installed. Run 'vmctl doctor --fix' to install it.", pkg)),
 		})
 	}
 

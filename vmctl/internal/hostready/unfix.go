@@ -23,6 +23,9 @@ var cleanupPackages = []string{
 // guard than `--purge-all`'s "no VM other than mine", since Unfix has no
 // VM of its own).
 func Unfix(ctx context.Context, r execrunner.Runner, out io.Writer) error {
+	if err := checkApt(); err != nil {
+		return err
+	}
 	if err := refuseIfAnyVMExists(ctx, r); err != nil {
 		return err
 	}
